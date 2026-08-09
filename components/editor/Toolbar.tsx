@@ -22,6 +22,8 @@ interface ToolbarProps {
   onToggleBackground?: () => void;
   bgOpacity?: number;
   onBgOpacityChange?: (opacity: number) => void;
+  cropToRoom?: boolean;
+  onToggleCropToRoom?: () => void;
 }
 
 export function Toolbar({
@@ -44,6 +46,8 @@ export function Toolbar({
   onToggleBackground,
   bgOpacity,
   onBgOpacityChange,
+  cropToRoom,
+  onToggleCropToRoom,
 }: ToolbarProps) {
   return (
     <div className="flex flex-col gap-4 w-64 shrink-0 border-r border-neutral-200 bg-neutral-50 p-4 h-full overflow-y-auto">
@@ -136,6 +140,10 @@ export function Toolbar({
           <label className="text-xs text-neutral-600 flex items-center gap-2 mb-3">
             <input type="checkbox" checked={!!showBackground} onChange={onToggleBackground} />
             Show floor plan
+          </label>
+          <label className="text-xs text-neutral-600 flex items-center gap-2 mb-3">
+            <input type="checkbox" checked={!!cropToRoom} onChange={onToggleCropToRoom} />
+            Crop floor plan to room
           </label>
           <label className="text-xs text-neutral-600 flex flex-col gap-1">
             Opacity: {Math.round((bgOpacity ?? 0) * 100)}%

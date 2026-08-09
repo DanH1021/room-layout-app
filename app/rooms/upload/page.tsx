@@ -9,6 +9,7 @@ import { TopNav } from "@/components/dashboard/TopNav";
 import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 import { normToPx, pxToInchPoint } from "@/lib/geometry/resolveFloorPlan";
 import { polygonBoundingBox } from "@/lib/geometry/room";
+import { snapVertexToNeighbors } from "@/lib/geometry/snapVertex";
 
 const MANAGER_ROLES = new Set(["administrator", "sales_manager"]);
 const MAX_FILE_BYTES = 15 * 1024 * 1024; // 15MB, matches app/api/rooms/plan-uploads/route.ts
@@ -33,6 +34,10 @@ const OBSTACLE_TYPES = [
   "bump_out",
   "other",
 ] as const;
+
+// Mirrors RoomCanvas.tsx's DOOR_LIKE_OBSTACLE_TYPES — types that read as
+// "an opening" rather than a solid obstacle.
+const DOOR_LIKE_OBSTACLE_TYPES = new Set(["door", "kitchen_entrance", "emergency_exit"]);
 
 const MAX_VIEW_WIDTH = 900;
 const MAX_VIEW_HEIGHT = 640;
@@ -691,6 +696,14 @@ export default function UploadFloorPlanPage() {
                                 const node = e.target;
                                 updateVertex(i, { x: node.x() / viewScale, y: node.y() / viewScale });
                               }}
+                              onDragEnd={(e) => {
+                                const node = e.target;
+                                const dropped = { x: node.x() / viewScale, y: node.y() / viewScale };
+                                setBoundaryPx((prev) => {
+                                  const withDrop = prev.map((pt, idx) => (idx === i ? dropped : pt));
+                                  return snapVertexToNeighbors(withDrop, i);
+                                });
+                              }}
                             />
                           </Group>
                         ))}
@@ -796,9 +809,13 @@ function ObstacleShape({
   onSelect: () => void;
   onDragMove: (xPx: number, yPx: number) => void;
 }) {
-  const fill = "rgba(148,163,184,0.6)";
-  const stroke = selected ? "#2563eb" : "#475569";
-  const strokeWidth = selected ? 2 : 1;
+  // Doors/entrances get a distinct warm color (matching RoomCanvas's
+  // door-swing treatment) so they read as openings rather than generic
+  // solid obstacles, even in this simpler drag-to-edit view.
+  const isDoorLike = DOOR_LIKE_OBSTACLE_TYPES.has(obstacle.type);
+  const fill = isDoorLike ? "rgba(161,98,7,0.15)" : "rgba(148,163,184,0.6)";
+  const stroke = selected ? "#2563eb" : isDoorLike ? "#a16207" : "#475569";
+  const strokeWidth = selected ? 2 : isDoorLike ? 2 : 1;
   const x = obstacle.xPx * viewScale;
   const y = obstacle.yPx * viewScale;
 

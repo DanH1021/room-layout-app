@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Stage, Layer, Rect, Circle, Text, Group, Transformer, Line, Image as KonvaImage } from "react-konva";
+import { Stage, Layer, Rect, Circle, Text, Group, Transformer, Line, Shape, Image as KonvaImage } from "react-konva";
 import Konva from "konva";
 import { EquipmentItem, LayoutObject, RoomFeatureRecord, RoomTemplate, roomFeatureToObstacle } from "@/lib/geometry/types";
 import { instantiateEquipment } from "@/lib/geometry/placement";
@@ -63,6 +63,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   const [containerSize, setContainerSize] = useState({ width: 1000, height: 700 });
   const [bgOpacity, setBgOpacity] = useState(0.6);
   const [showBackground, setShowBackground] = useState(true);
+  const [cropToRoom, setCropToRoom] = useState(true);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const groupRefs = useRef<Record<string, Konva.Group>>({});
@@ -343,6 +344,8 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
         onToggleBackground={() => setShowBackground((v) => !v)}
         bgOpacity={bgOpacity}
         onBgOpacityChange={setBgOpacity}
+        cropToRoom={cropToRoom}
+        onToggleCropToRoom={() => setCropToRoom((v) => !v)}
       />
       <div ref={containerRef} className="flex-1 h-full bg-neutral-100 overflow-hidden relative">
         <div className="absolute top-2 left-2 z-10 bg-white/90 backdrop-blur px-3 py-1.5 rounded-md text-xs text-neutral-700 shadow-sm flex items-center gap-3">
@@ -387,21 +390,38 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
         >
           {showBackground && room.backgroundImageUrl && bgImage && (
             <Layer x={stageOffset.x} y={stageOffset.y}>
-              <KonvaImage
-                image={bgImage}
-                x={0}
-                y={0}
-                width={inchesToPx(
-                  room.backgroundImageWidthPx ? room.backgroundImageWidthPx / (room.backgroundImagePxPerInch ?? 1) : 0,
-                  zoom
-                )}
-                height={inchesToPx(
-                  room.backgroundImageHeightPx ? room.backgroundImageHeightPx / (room.backgroundImagePxPerInch ?? 1) : 0,
-                  zoom
-                )}
-                opacity={bgOpacity}
-                listening={false}
-              />
+              <Group
+                clipFunc={
+                  cropToRoom
+                    ? (ctx) => {
+                        ctx.beginPath();
+                        room.boundary.forEach((p, i) => {
+                          const px = inchesToPx(p.x - boundingBox.minX, zoom);
+                          const py = inchesToPx(p.y - boundingBox.minY, zoom);
+                          if (i === 0) ctx.moveTo(px, py);
+                          else ctx.lineTo(px, py);
+                        });
+                        ctx.closePath();
+                      }
+                    : undefined
+                }
+              >
+                <KonvaImage
+                  image={bgImage}
+                  x={inchesToPx(-boundingBox.minX, zoom)}
+                  y={inchesToPx(-boundingBox.minY, zoom)}
+                  width={inchesToPx(
+                    room.backgroundImageWidthPx ? room.backgroundImageWidthPx / (room.backgroundImagePxPerInch ?? 1) : 0,
+                    zoom
+                  )}
+                  height={inchesToPx(
+                    room.backgroundImageHeightPx ? room.backgroundImageHeightPx / (room.backgroundImagePxPerInch ?? 1) : 0,
+                    zoom
+                  )}
+                  opacity={bgOpacity}
+                  listening={false}
+                />
+              </Group>
             </Layer>
           )}
           <Layer x={stageOffset.x} y={stageOffset.y}>
@@ -415,8 +435,8 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
               ])}
               closed
               fill="#ffffff"
-              stroke="#262626"
-              strokeWidth={2}
+              stroke="#44403c"
+              strokeWidth={6}
               listening={false}
             />
             <Group
@@ -601,8 +621,9 @@ function ObstacleVisual({
   zoom: number;
   boundingBox: { minX: number; minY: number };
 }) {
-  const fill = "#94a3b8";
-  const stroke = "#475569";
+  const isDoorLike = DOOR_LIKE_OBSTACLE_TYPES.has(feature.type);
+  const fill = isDoorLike ? "#a16207" : "#94a3b8";
+  const stroke = isDoorLike ? "#a16207" : "#475569";
   const x = inchesToPx(feature.x - boundingBox.minX, zoom);
   const y = inchesToPx(feature.y - boundingBox.minY, zoom);
 
@@ -610,7 +631,16 @@ function ObstacleVisual({
     const r = inchesToPx((feature.diameterIn ?? 12) / 2, zoom);
     return (
       <>
-        <Circle x={x} y={y} radius={r} fill={fill} opacity={0.5} stroke={stroke} strokeWidth={1} listening={false} />
+        <Circle
+          x={x}
+          y={y}
+          radius={r}
+          fill={isDoorLike ? undefined : fill}
+          opacity={isDoorLike ? 1 : 0.5}
+          stroke={stroke}
+          strokeWidth={isDoorLike ? 2 : 1}
+          listening={false}
+        />
         <Text
           x={x - r}
           y={y - 5}
@@ -635,10 +665,10 @@ function ObstacleVisual({
         <Line
           points={points}
           closed
-          fill={fill}
-          opacity={0.5}
+          fill={isDoorLike ? undefined : fill}
+          opacity={isDoorLike ? 1 : 0.5}
           stroke={stroke}
-          strokeWidth={1}
+          strokeWidth={isDoorLike ? 2 : 1}
           listening={false}
         />
         <Text x={x - 40} y={y - 5} width={80} align="center" text={feature.type} fontSize={10} fill="#1e293b" listening={false} />
@@ -648,6 +678,36 @@ function ObstacleVisual({
 
   const w = inchesToPx(feature.widthIn ?? 12, zoom);
   const h = inchesToPx(feature.lengthIn ?? 12, zoom);
+
+  if (isDoorLike) {
+    // Draw a door-swing diagram (leaf + quarter-circle swing arc) instead of a
+    // solid obstacle block, so it reads as an opening rather than something
+    // blocking the space. Hinge is anchored at the bottom-left corner of the
+    // obstacle's footprint, leaf swings up, radius = door width.
+    const hingeX = -w / 2;
+    const hingeY = h / 2;
+    return (
+      <>
+        <Shape
+          x={x}
+          y={y}
+          rotation={feature.rotation}
+          stroke={stroke}
+          strokeWidth={2}
+          listening={false}
+          sceneFunc={(ctx, shapeNode) => {
+            ctx.beginPath();
+            ctx.moveTo(hingeX, hingeY);
+            ctx.lineTo(hingeX, hingeY - w);
+            ctx.arc(hingeX, hingeY, w, -Math.PI / 2, 0, false);
+            ctx.strokeShape(shapeNode);
+          }}
+        />
+        <Text x={x - w / 2} y={y + h / 2 + 2} width={w} align="center" text={feature.type} fontSize={10} fill="#1e293b" listening={false} />
+      </>
+    );
+  }
+
   return (
     <>
       <Rect
@@ -668,3 +728,5 @@ function ObstacleVisual({
     </>
   );
 }
+
+const DOOR_LIKE_OBSTACLE_TYPES = new Set(["door", "kitchen_entrance", "emergency_exit"]);

@@ -17,9 +17,14 @@ export interface CircleShape {
   radius: number;
 }
 
+export interface PolygonShape {
+  points: { x: number; y: number }[]; // absolute inches, must be convex
+}
+
 export type Shape =
   | ({ kind: "rect" } & RectShape)
-  | ({ kind: "circle" } & CircleShape);
+  | ({ kind: "circle" } & CircleShape)
+  | ({ kind: "polygon" } & PolygonShape);
 
 interface Vec2 {
   x: number;
@@ -76,18 +81,25 @@ function projectOntoAxis(corners: Vec2[], axis: Vec2): { min: number; max: numbe
  * collision).
  */
 export function rectVsRect(a: RectShape, b: RectShape): boolean {
-  const cornersA = rectCorners(a);
-  const cornersB = rectCorners(b);
+  return convexPolygonVsConvexPolygon(rectCorners(a), rectCorners(b));
+}
 
-  // SAT normally tests axes perpendicular to each edge. For a rectangle the
-  // two adjacent edge directions are already mutually perpendicular, so
-  // using the edge vectors themselves as axes is equivalent and simpler.
-  const axes: Vec2[] = [
-    normalize({ x: cornersA[1].x - cornersA[0].x, y: cornersA[1].y - cornersA[0].y }),
-    normalize({ x: cornersA[3].x - cornersA[0].x, y: cornersA[3].y - cornersA[0].y }),
-    normalize({ x: cornersB[1].x - cornersB[0].x, y: cornersB[1].y - cornersB[0].y }),
-    normalize({ x: cornersB[3].x - cornersB[0].x, y: cornersB[3].y - cornersB[0].y }),
-  ];
+/**
+ * General convex-polygon-vs-convex-polygon overlap test using the
+ * Separating Axis Theorem. Builds one axis per edge of each polygon (the
+ * normalized edge vector itself — equivalent to using the edge normal for
+ * SAT purposes since the axis set is the same up to a 90-degree rotation).
+ * Returns false as soon as a separating axis is found; true if none exists.
+ */
+export function convexPolygonVsConvexPolygon(cornersA: Vec2[], cornersB: Vec2[]): boolean {
+  const axes: Vec2[] = [];
+  for (const corners of [cornersA, cornersB]) {
+    for (let i = 0; i < corners.length; i++) {
+      const next = corners[(i + 1) % corners.length];
+      const cur = corners[i];
+      axes.push(normalize({ x: next.x - cur.x, y: next.y - cur.y }));
+    }
+  }
 
   for (const axis of axes) {
     const pa = projectOntoAxis(cornersA, axis);
@@ -124,11 +136,80 @@ export function circleVsRect(circle: CircleShape, rect: RectShape): boolean {
   return closestDist < circle.radius;
 }
 
+/**
+ * SAT-based circle-vs-convex-polygon overlap test. Axes are each polygon
+ * edge's normal, plus the axis from the circle's center to its nearest
+ * polygon vertex (needed to correctly separate a circle from a polygon
+ * corner that no edge normal alone would catch).
+ */
+export function circleVsConvexPolygon(circle: CircleShape, points: Vec2[]): boolean {
+  const axes: Vec2[] = [];
+  for (let i = 0; i < points.length; i++) {
+    const cur = points[i];
+    const next = points[(i + 1) % points.length];
+    const edge = { x: next.x - cur.x, y: next.y - cur.y };
+    axes.push(normalize({ x: -edge.y, y: edge.x }));
+  }
+
+  let nearest = points[0];
+  let nearestDist = Infinity;
+  for (const p of points) {
+    const d = Math.hypot(p.x - circle.cx, p.y - circle.cy);
+    if (d < nearestDist) {
+      nearestDist = d;
+      nearest = p;
+    }
+  }
+  axes.push(normalize({ x: nearest.x - circle.cx, y: nearest.y - circle.cy }));
+
+  for (const axis of axes) {
+    const poly = projectOntoAxis(points, axis);
+    const centerProj = dot({ x: circle.cx, y: circle.cy }, axis);
+    const circleMin = centerProj - circle.radius;
+    const circleMax = centerProj + circle.radius;
+    if (poly.max <= circleMin || circleMax <= poly.min) {
+      return false; // separating axis found -> no collision
+    }
+  }
+  return true;
+}
+
+/**
+ * Checks whether a set of points forms a convex polygon by verifying the
+ * cross product of consecutive edge vectors keeps a consistent sign all the
+ * way around (works for either winding order). Returns false for
+ * degenerate (fewer than 3 points) or concave polygons (e.g. an L-shape).
+ */
+export function isConvexPolygon(points: { x: number; y: number }[]): boolean {
+  if (points.length < 3) return false;
+  let sign = 0;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    const c = points[(i + 2) % points.length];
+    const cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+    if (cross !== 0) {
+      const curSign = cross > 0 ? 1 : -1;
+      if (sign === 0) {
+        sign = curSign;
+      } else if (curSign !== sign) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 /** Dispatches to the correct pairwise test based on shape kind. */
 export function shapesOverlap(a: Shape, b: Shape): boolean {
   if (a.kind === "rect" && b.kind === "rect") return rectVsRect(a, b);
   if (a.kind === "circle" && b.kind === "circle") return circleVsCircle(a, b);
   if (a.kind === "circle" && b.kind === "rect") return circleVsRect(a, b);
   if (a.kind === "rect" && b.kind === "circle") return circleVsRect(b, a);
+  if (a.kind === "polygon" && b.kind === "polygon") return convexPolygonVsConvexPolygon(a.points, b.points);
+  if (a.kind === "circle" && b.kind === "polygon") return circleVsConvexPolygon(a, b.points);
+  if (a.kind === "polygon" && b.kind === "circle") return circleVsConvexPolygon(b, a.points);
+  if (a.kind === "rect" && b.kind === "polygon") return convexPolygonVsConvexPolygon(rectCorners(a), b.points);
+  if (a.kind === "polygon" && b.kind === "rect") return convexPolygonVsConvexPolygon(rectCorners(b), a.points);
   return false;
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import { TopNav } from "@/components/dashboard/TopNav";
 import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 
@@ -84,6 +85,14 @@ export default function RoomsPage() {
             The MVP creates a simple rectangular room from width and length. Tracing an irregular boundary
             (columns, alcoves, angled walls) from a floor plan is a later phase.
           </p>
+          {user && canManage && (
+            <Link
+              href="/rooms/upload"
+              className="inline-block mb-3 text-sm px-4 py-2 rounded-md border border-neutral-300 text-neutral-700 hover:bg-neutral-100 transition-colors"
+            >
+              Upload a floor plan
+            </Link>
+          )}
           {user && !canManage ? (
             <p className="text-sm text-neutral-500 bg-white border border-neutral-200 rounded-lg px-4 py-3">
               Only administrators and sales managers can add rooms. Ask one of them, or view the existing rooms below.

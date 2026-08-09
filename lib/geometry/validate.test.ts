@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { validateLayout } from "@/lib/geometry/validate";
-import { EquipmentItem, LayoutObject } from "@/lib/geometry/types";
+import { EquipmentItem, LayoutObject, Obstacle } from "@/lib/geometry/types";
 
 const roomBoundary = [
   { x: 0, y: 0 },
@@ -105,5 +105,57 @@ describe("validateLayout", () => {
     const issues = validateLayout(units, roomBoundary);
     expect(issues.some((i) => i.type === "clearance_conflict")).toBe(true);
     expect(issues.every((i) => i.type !== "collision")).toBe(true);
+  });
+});
+
+describe("validateLayout with obstacles", () => {
+  it("reports an obstacle_collision error when a table overlaps a blocking rect obstacle", () => {
+    const units = [{ object: table("t1", 200, 200), item: roundTableItem }];
+    const obstacles: Obstacle[] = [
+      {
+        id: "pillar-1",
+        name: "Support Pillar",
+        shape: { kind: "rect", cx: 210, cy: 200, width: 20, height: 20, rotation: 0 },
+        blocksPlacement: true,
+      },
+    ];
+    const issues = validateLayout(units, roomBoundary, obstacles);
+    expect(issues.some((i) => i.type === "obstacle_collision" && i.severity === "error")).toBe(true);
+  });
+
+  it("does not report an issue when the overlapping obstacle has blocksPlacement: false", () => {
+    const units = [{ object: table("t1", 200, 200), item: roundTableItem }];
+    const obstacles: Obstacle[] = [
+      {
+        id: "rug-1",
+        name: "Decorative Rug",
+        shape: { kind: "rect", cx: 210, cy: 200, width: 20, height: 20, rotation: 0 },
+        blocksPlacement: false,
+      },
+    ];
+    const issues = validateLayout(units, roomBoundary, obstacles);
+    expect(issues).toHaveLength(0);
+  });
+
+  it("reports an obstacle_collision error when a table overlaps a blocking circle obstacle", () => {
+    const units = [{ object: table("t1", 200, 200), item: roundTableItem }];
+    const obstacles: Obstacle[] = [
+      {
+        id: "column-1",
+        name: "Round Column",
+        shape: { kind: "circle", cx: 220, cy: 200, radius: 15 },
+        blocksPlacement: true,
+      },
+    ];
+    const issues = validateLayout(units, roomBoundary, obstacles);
+    expect(issues.some((i) => i.type === "obstacle_collision" && i.severity === "error")).toBe(true);
+  });
+
+  it("defaults to no obstacles when the third parameter is omitted", () => {
+    const units = [
+      { object: table("t1", 200, 200), item: roundTableItem },
+      { object: table("t2", 800, 800), item: roundTableItem },
+    ];
+    expect(validateLayout(units, roomBoundary)).toHaveLength(0);
   });
 });

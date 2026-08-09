@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Stage, Layer, Rect, Circle, Text, Group, Transformer, Line } from "react-konva";
+import { Stage, Layer, Rect, Circle, Text, Group, Transformer, Line, Image as KonvaImage } from "react-konva";
 import Konva from "konva";
-import { EquipmentItem, LayoutObject, RoomTemplate } from "@/lib/geometry/types";
+import { EquipmentItem, LayoutObject, RoomFeatureRecord, RoomTemplate, roomFeatureToObstacle } from "@/lib/geometry/types";
 import { instantiateEquipment } from "@/lib/geometry/placement";
 import { inchesToPx, pxToInches, feetToInches } from "@/lib/geometry/scale";
+import { polygonBoundingBox } from "@/lib/geometry/room";
 import { Toolbar } from "@/components/editor/Toolbar";
 import { IssuePanel } from "@/components/editor/IssuePanel";
 import { AICommandBar } from "@/components/editor/AICommandBar";
@@ -17,6 +18,26 @@ import Link from "next/link";
 const STAGE_PADDING_PX = 80;
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
+
+// Hand-rolled HTMLImageElement loader — avoids pulling in the `use-image`
+// npm package for a single background-floor-plan image.
+function useHTMLImage(url: string | null | undefined): HTMLImageElement | null {
+  // Track the loaded image alongside the url it was loaded for, and derive
+  // the returned value from a match check rather than resetting state to
+  // null synchronously inside the effect when url is falsy/changes.
+  const [loaded, setLoaded] = useState<{ url: string; img: HTMLImageElement } | null>(null);
+  useEffect(() => {
+    if (!url) return;
+    const image = new window.Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => setLoaded({ url, img: image });
+    image.src = url;
+    return () => {
+      image.onload = null;
+    };
+  }, [url]);
+  return loaded && loaded.url === url ? loaded.img : null;
+}
 
 // The API serializes Prisma's nullable Float columns as `null`; the
 // in-app geometry types use `undefined` for "not set". Normalize once here.
@@ -40,6 +61,8 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   const [showGrid, setShowGrid] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [containerSize, setContainerSize] = useState({ width: 1000, height: 700 });
+  const [bgOpacity, setBgOpacity] = useState(0.6);
+  const [showBackground, setShowBackground] = useState(true);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const groupRefs = useRef<Record<string, Konva.Group>>({});
@@ -176,7 +199,8 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
         item: getEquipmentItem(c.equipmentItemId),
       })),
     }));
-    return validateLayout(units, room.boundary);
+    const obstacles = (room.features ?? []).map(roomFeatureToObstacle);
+    return validateLayout(units, room.boundary, obstacles);
   }, [parents, childrenByParent, room, getEquipmentItem]);
 
   const issueSeverityByObjectId = useMemo(() => {
@@ -194,10 +218,23 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
     [objects, equipmentList, getEquipmentItem]
   );
 
-  const roomWidthIn = feetToInches(room?.widthFt ?? 0);
-  const roomLengthIn = feetToInches(room?.lengthFt ?? 0);
+  // The bounding box of the actual boundary polygon is the real rendering
+  // extent — for today's rectangular seeded rooms this equals widthFt/lengthFt
+  // in inches, but for an irregular (e.g. traced-from-photo) room it may not.
+  // widthFt/lengthFt are kept only for the text label, never for geometry.
+  const boundingBox = useMemo(
+    () =>
+      room?.boundary && room.boundary.length
+        ? polygonBoundingBox(room.boundary)
+        : { minX: 0, minY: 0, maxX: 0, maxY: 0, width: 0, height: 0 },
+    [room]
+  );
+  const roomWidthIn = boundingBox.width;
+  const roomLengthIn = boundingBox.height;
   const roomWidthPx = inchesToPx(roomWidthIn, zoom);
   const roomLengthPx = inchesToPx(roomLengthIn, zoom);
+
+  const bgImage = useHTMLImage(room?.backgroundImageUrl);
 
   const stageOffset = {
     x: Math.max(STAGE_PADDING_PX, (containerSize.width - roomWidthPx) / 2),
@@ -205,8 +242,12 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   };
 
   function addEquipment(equipmentItemId: string) {
-    const centerX = roomWidthIn / 2 + (Math.random() * 24 - 12);
-    const centerY = roomLengthIn / 2 + (Math.random() * 24 - 12);
+    // Object coordinates live in the same absolute room space as the
+    // boundary polygon, so the center point must be offset by the bounding
+    // box's origin — not just half its width/height — for rooms that don't
+    // start at (0,0).
+    const centerX = boundingBox.minX + roomWidthIn / 2 + (Math.random() * 24 - 12);
+    const centerY = boundingBox.minY + roomLengthIn / 2 + (Math.random() * 24 - 12);
     const newObjects = instantiateEquipment(equipmentItemId, centerX, centerY, getEquipmentItem);
     setObjects((prev) => [...prev, ...newObjects]);
     setSelectedId(newObjects[0].id);
@@ -297,6 +338,11 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
         onSave={saveLayout}
         saveStatus={saveStatus}
         onExportPdf={exportPdf}
+        hasBackgroundImage={!!room.backgroundImageUrl}
+        showBackground={showBackground}
+        onToggleBackground={() => setShowBackground((v) => !v)}
+        bgOpacity={bgOpacity}
+        onBgOpacityChange={setBgOpacity}
       />
       <div ref={containerRef} className="flex-1 h-full bg-neutral-100 overflow-hidden relative">
         <div className="absolute top-2 left-2 z-10 bg-white/90 backdrop-blur px-3 py-1.5 rounded-md text-xs text-neutral-700 shadow-sm flex items-center gap-3">
@@ -339,29 +385,67 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
             if (e.target === e.target.getStage()) setSelectedId(null);
           }}
         >
+          {showBackground && room.backgroundImageUrl && bgImage && (
+            <Layer x={stageOffset.x} y={stageOffset.y}>
+              <KonvaImage
+                image={bgImage}
+                x={0}
+                y={0}
+                width={inchesToPx(
+                  room.backgroundImageWidthPx ? room.backgroundImageWidthPx / (room.backgroundImagePxPerInch ?? 1) : 0,
+                  zoom
+                )}
+                height={inchesToPx(
+                  room.backgroundImageHeightPx ? room.backgroundImageHeightPx / (room.backgroundImagePxPerInch ?? 1) : 0,
+                  zoom
+                )}
+                opacity={bgOpacity}
+                listening={false}
+              />
+            </Layer>
+          )}
           <Layer x={stageOffset.x} y={stageOffset.y}>
-            {/* Room boundary */}
-            <Rect
-              x={0}
-              y={0}
-              width={roomWidthPx}
-              height={roomLengthPx}
+            {/* Room boundary — a closed polygon so irregular (non-rectangular)
+                rooms render correctly; a 4-point rectangle boundary renders
+                identically to the old Rect-based version. */}
+            <Line
+              points={room.boundary.flatMap((p) => [
+                inchesToPx(p.x - boundingBox.minX, zoom),
+                inchesToPx(p.y - boundingBox.minY, zoom),
+              ])}
+              closed
               fill="#ffffff"
               stroke="#262626"
               strokeWidth={2}
               listening={false}
             />
-            {gridLines.map((l) => (
-              <Line
-                key={l.key}
-                points={l.points.map((v) => inchesToPx(v, zoom))}
-                stroke="#e5e5e5"
-                strokeWidth={1}
-                listening={false}
-              />
-            ))}
+            <Group
+              clipFunc={(ctx) => {
+                ctx.beginPath();
+                room.boundary.forEach((p, i) => {
+                  const px = inchesToPx(p.x - boundingBox.minX, zoom);
+                  const py = inchesToPx(p.y - boundingBox.minY, zoom);
+                  if (i === 0) ctx.moveTo(px, py);
+                  else ctx.lineTo(px, py);
+                });
+                ctx.closePath();
+              }}
+            >
+              {gridLines.map((l) => (
+                <Line
+                  key={l.key}
+                  points={l.points.map((v) => inchesToPx(v, zoom))}
+                  stroke="#e5e5e5"
+                  strokeWidth={1}
+                  listening={false}
+                />
+              ))}
 
-            {parents.map((parent) => {
+              {(room.features ?? []).map((feature) => (
+                <ObstacleVisual key={feature.id} feature={feature} zoom={zoom} boundingBox={boundingBox} />
+              ))}
+
+              {parents.map((parent) => {
               const item = getEquipmentItem(parent.equipmentItemId);
               const children = childrenByParent[parent.id] ?? [];
               return (
@@ -426,7 +510,8 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
                   ))}
                 </Group>
               );
-            })}
+              })}
+            </Group>
 
             <Transformer
               ref={transformerRef}
@@ -501,5 +586,85 @@ function ShapeVisual({
       strokeWidth={strokeWidth}
       cornerRadius={2}
     />
+  );
+}
+
+// Fixed architectural obstacles (columns, permanent bars, stairs, etc.)
+// traced from an uploaded floor plan. Rendered non-interactively, styled
+// distinctly from movable equipment (slate gray vs. the equipment palette).
+function ObstacleVisual({
+  feature,
+  zoom,
+  boundingBox,
+}: {
+  feature: RoomFeatureRecord;
+  zoom: number;
+  boundingBox: { minX: number; minY: number };
+}) {
+  const fill = "#94a3b8";
+  const stroke = "#475569";
+  const x = inchesToPx(feature.x - boundingBox.minX, zoom);
+  const y = inchesToPx(feature.y - boundingBox.minY, zoom);
+
+  if (feature.shape === "circle") {
+    const r = inchesToPx((feature.diameterIn ?? 12) / 2, zoom);
+    return (
+      <>
+        <Circle x={x} y={y} radius={r} fill={fill} opacity={0.5} stroke={stroke} strokeWidth={1} listening={false} />
+        <Text
+          x={x - r}
+          y={y - 5}
+          width={r * 2}
+          align="center"
+          text={feature.type}
+          fontSize={10}
+          fill="#1e293b"
+          listening={false}
+        />
+      </>
+    );
+  }
+
+  if (feature.shape === "polygon") {
+    const points = (feature.metadata?.polygonPoints ?? []).flatMap((p) => [
+      inchesToPx(p.x - boundingBox.minX, zoom),
+      inchesToPx(p.y - boundingBox.minY, zoom),
+    ]);
+    return (
+      <>
+        <Line
+          points={points}
+          closed
+          fill={fill}
+          opacity={0.5}
+          stroke={stroke}
+          strokeWidth={1}
+          listening={false}
+        />
+        <Text x={x - 40} y={y - 5} width={80} align="center" text={feature.type} fontSize={10} fill="#1e293b" listening={false} />
+      </>
+    );
+  }
+
+  const w = inchesToPx(feature.widthIn ?? 12, zoom);
+  const h = inchesToPx(feature.lengthIn ?? 12, zoom);
+  return (
+    <>
+      <Rect
+        x={x}
+        y={y}
+        width={w}
+        height={h}
+        offsetX={w / 2}
+        offsetY={h / 2}
+        rotation={feature.rotation}
+        fill={fill}
+        opacity={0.5}
+        stroke={stroke}
+        strokeWidth={1}
+        listening={false}
+      />
+      <Text x={x - w / 2} y={y - 5} width={w} align="center" text={feature.type} fontSize={10} fill="#1e293b" listening={false} />
+    </>
   );
 }

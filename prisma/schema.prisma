@@ -67,6 +67,15 @@ model RoomTemplate {
   boundaryJson    Json // polygon points defining the room shape, in inches
   features        RoomFeature[]
   events          Event[]
+  floorPlanUploads FloorPlanUpload[]
+  // Source floor-plan image shown as a background layer under the traced
+  // boundary/obstacles in the editor. Null for rooms created the old
+  // (manual width/length) way. See lib/pdf/rasterizePlan.ts /
+  // lib/storage/blob.ts for how these get populated.
+  backgroundImageUrl       String?
+  backgroundImageWidthPx   Float?
+  backgroundImageHeightPx  Float?
+  backgroundImagePxPerInch Float?
   createdAt       DateTime      @default(now())
 }
 
@@ -76,12 +85,60 @@ model RoomFeature {
   roomTemplate   RoomTemplate @relation(fields: [roomTemplateId], references: [id])
   type           String // wall | door | window | column | stairs | permanent_bar | kitchen_entrance
   // | restroom | emergency_exit | electrical | av_connection | screen | other
-  x        Float
-  y        Float
-  widthIn  Float?
-  lengthIn Float?
-  rotation Float @default(0)
+  shape           String  @default("rect") // "rect" | "circle" | "polygon" — see lib/geometry/collision.ts's Shape union
+  x               Float
+  y               Float
+  widthIn         Float?
+  lengthIn        Float?
+  diameterIn      Float? // circle obstacles
+  rotation        Float   @default(0)
+  // Hard obstacle (blocks equipment placement, checked by validateLayout)
+  // vs. a reference-only annotation (e.g. a door swing shown for context but
+  // not collision-checked). Defaults to true — most traced features are
+  // real physical obstructions.
+  blocksPlacement Boolean @default(true)
+  // For shape:"polygon" (irregular obstacles like a bump-out), the absolute
+  // vertex list lives here as { polygonPoints: {x,y}[] } (inches) rather
+  // than overloading x/y/rotation, which stay meaningful for rect/circle.
   metadata Json?
+}
+
+// Tracks one floor-plan-upload wizard run end to end: the uploaded source
+// file, the AI's proposed boundary/obstacles, the resolved scale, and the
+// human-approved final result. Kept even after commit as an audit trail —
+// proposedXJson (raw AI output) is deliberately never overwritten by
+// finalXJson (what the human approved), so extraction quality can be
+// measured later.
+model FloorPlanUpload {
+  id             String        @id @default(cuid())
+  orgId          String
+  uploadedBy     String // userId
+  roomTemplateId String?
+  roomTemplate   RoomTemplate? @relation(fields: [roomTemplateId], references: [id])
+
+  originalFileUrl  String
+  originalFileType String // "pdf" | "image"
+
+  backgroundImageUrl      String?
+  backgroundImageWidthPx  Float?
+  backgroundImageHeightPx Float?
+
+  aiRawResponseJson Json?
+  aiScaleConfidence String? // "high" | "medium" | "low" | "none"
+
+  calibrationMethod   String? // "scale_note" | "manual_line"
+  calibrationLineJson Json? // { p1:{x,y}, p2:{x,y}, realWorldInches } in background-image px
+  pxPerInch           Float?
+
+  proposedBoundaryJson  Json?
+  proposedObstaclesJson Json?
+  finalBoundaryJson     Json?
+  finalObstaclesJson    Json?
+
+  status       String  @default("uploaded") // uploaded|parsing|parsed|calibrated|confirmed|failed
+  errorMessage String?
+
+  createdAt DateTime @default(now())
 }
 
 model Client {

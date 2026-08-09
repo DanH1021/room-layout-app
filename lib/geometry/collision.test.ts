@@ -1,7 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { rectVsRect, circleVsCircle, circleVsRect, RectShape } from "@/lib/geometry/collision";
+import {
+  rectVsRect,
+  circleVsCircle,
+  circleVsRect,
+  RectShape,
+  convexPolygonVsConvexPolygon,
+  circleVsConvexPolygon,
+  isConvexPolygon,
+  shapesOverlap,
+} from "@/lib/geometry/collision";
 import { withClearance } from "@/lib/geometry/clearance";
-import { pointInRoom, shapeFullyInRoom } from "@/lib/geometry/room";
+import { pointInRoom, shapeFullyInRoom, polygonBoundingBox } from "@/lib/geometry/room";
 
 describe("rectVsRect", () => {
   it("detects overlap between two axis-aligned overlapping rects", () => {
@@ -118,5 +127,162 @@ describe("room boundary", () => {
   it("shapeFullyInRoom: circle poking outside the boundary", () => {
     const circle = { kind: "circle" as const, cx: 95, cy: 50, radius: 10 };
     expect(shapeFullyInRoom(circle, boundary)).toBe(false);
+  });
+
+  it("shapeFullyInRoom: polygon fully inside", () => {
+    const polygon = {
+      kind: "polygon" as const,
+      points: [
+        { x: 40, y: 40 },
+        { x: 60, y: 40 },
+        { x: 50, y: 60 },
+      ],
+    };
+    expect(shapeFullyInRoom(polygon, boundary)).toBe(true);
+  });
+
+  it("shapeFullyInRoom: polygon poking outside the boundary", () => {
+    const polygon = {
+      kind: "polygon" as const,
+      points: [
+        { x: 90, y: 40 },
+        { x: 110, y: 40 },
+        { x: 100, y: 60 },
+      ],
+    };
+    expect(shapeFullyInRoom(polygon, boundary)).toBe(false);
+  });
+});
+
+describe("convexPolygonVsConvexPolygon", () => {
+  const square = [
+    { x: 0, y: 0 },
+    { x: 10, y: 0 },
+    { x: 10, y: 10 },
+    { x: 0, y: 10 },
+  ];
+
+  it("detects overlap between a square and an overlapping triangle", () => {
+    const triangle = [
+      { x: 5, y: 5 },
+      { x: 20, y: 5 },
+      { x: 12, y: 20 },
+    ];
+    expect(convexPolygonVsConvexPolygon(square, triangle)).toBe(true);
+  });
+
+  it("detects no overlap between a square and a far-away triangle", () => {
+    const triangle = [
+      { x: 100, y: 100 },
+      { x: 120, y: 100 },
+      { x: 110, y: 120 },
+    ];
+    expect(convexPolygonVsConvexPolygon(square, triangle)).toBe(false);
+  });
+});
+
+describe("circleVsConvexPolygon", () => {
+  const square = [
+    { x: 0, y: 0 },
+    { x: 10, y: 0 },
+    { x: 10, y: 10 },
+    { x: 0, y: 10 },
+  ];
+
+  it("detects a circle overlapping the polygon", () => {
+    expect(circleVsConvexPolygon({ cx: 8, cy: 5, radius: 5 }, square)).toBe(true);
+  });
+
+  it("detects no overlap when the circle is well clear of the polygon", () => {
+    expect(circleVsConvexPolygon({ cx: 100, cy: 100, radius: 5 }, square)).toBe(false);
+  });
+
+  it("detects no overlap near a corner when the circle is outside the diagonal reach", () => {
+    // Circle sits diagonally near the (10,10) corner but far enough that
+    // neither an edge-normal axis nor the corner axis reports overlap.
+    expect(circleVsConvexPolygon({ cx: 20, cy: 20, radius: 3 }, square)).toBe(false);
+  });
+});
+
+describe("rect vs polygon (via shapesOverlap)", () => {
+  it("detects a rect overlapping a polygon", () => {
+    const rect = { kind: "rect" as const, cx: 5, cy: 5, width: 10, height: 10, rotation: 0 };
+    const polygon = {
+      kind: "polygon" as const,
+      points: [
+        { x: 8, y: 8 },
+        { x: 20, y: 8 },
+        { x: 14, y: 20 },
+      ],
+    };
+    expect(shapesOverlap(rect, polygon)).toBe(true);
+    expect(shapesOverlap(polygon, rect)).toBe(true);
+  });
+
+  it("detects no overlap between a rect and a far-away polygon", () => {
+    const rect = { kind: "rect" as const, cx: 0, cy: 0, width: 10, height: 10, rotation: 0 };
+    const polygon = {
+      kind: "polygon" as const,
+      points: [
+        { x: 100, y: 100 },
+        { x: 120, y: 100 },
+        { x: 110, y: 120 },
+      ],
+    };
+    expect(shapesOverlap(rect, polygon)).toBe(false);
+  });
+});
+
+describe("isConvexPolygon", () => {
+  it("returns true for a square", () => {
+    expect(
+      isConvexPolygon([
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 10, y: 10 },
+        { x: 0, y: 10 },
+      ])
+    ).toBe(true);
+  });
+
+  it("returns true for a triangle", () => {
+    expect(
+      isConvexPolygon([
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 5, y: 10 },
+      ])
+    ).toBe(true);
+  });
+
+  it("returns true for a regular pentagon", () => {
+    const points = Array.from({ length: 5 }, (_, i) => {
+      const angle = (i / 5) * Math.PI * 2;
+      return { x: 10 * Math.cos(angle), y: 10 * Math.sin(angle) };
+    });
+    expect(isConvexPolygon(points)).toBe(true);
+  });
+
+  it("returns false for an L-shape", () => {
+    const lShape = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 5 },
+      { x: 5, y: 5 },
+      { x: 5, y: 10 },
+      { x: 0, y: 10 },
+    ];
+    expect(isConvexPolygon(lShape)).toBe(false);
+  });
+});
+
+describe("polygonBoundingBox", () => {
+  it("computes the min/max bounding box", () => {
+    const box = polygonBoundingBox([
+      { x: 5, y: 10 },
+      { x: -3, y: 20 },
+      { x: 8, y: -4 },
+    ]);
+    expect(box).toEqual({ minX: -3, minY: -4, maxX: 8, maxY: 20, width: 11, height: 24 });
   });
 });

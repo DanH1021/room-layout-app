@@ -17,6 +17,11 @@ interface ToolbarProps {
   onSave: () => void;
   saveStatus: "idle" | "saving" | "saved" | "error";
   onExportPdf: () => void;
+  hasBackgroundImage?: boolean;
+  showBackground?: boolean;
+  onToggleBackground?: () => void;
+  bgOpacity?: number;
+  onBgOpacityChange?: (opacity: number) => void;
 }
 
 export function Toolbar({
@@ -34,6 +39,11 @@ export function Toolbar({
   onSave,
   saveStatus,
   onExportPdf,
+  hasBackgroundImage,
+  showBackground,
+  onToggleBackground,
+  bgOpacity,
+  onBgOpacityChange,
 }: ToolbarProps) {
   return (
     <div className="flex flex-col gap-4 w-64 shrink-0 border-r border-neutral-200 bg-neutral-50 p-4 h-full overflow-y-auto">
@@ -119,6 +129,27 @@ export function Toolbar({
           Snap to grid
         </label>
       </div>
+
+      {hasBackgroundImage && (
+        <div className="border-t border-neutral-200 pt-4">
+          <h2 className="text-sm font-semibold text-neutral-700 mb-2">Floor Plan</h2>
+          <label className="text-xs text-neutral-600 flex items-center gap-2 mb-3">
+            <input type="checkbox" checked={!!showBackground} onChange={onToggleBackground} />
+            Show floor plan
+          </label>
+          <label className="text-xs text-neutral-600 flex flex-col gap-1">
+            Opacity: {Math.round((bgOpacity ?? 0) * 100)}%
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={bgOpacity ?? 0}
+              onChange={(e) => onBgOpacityChange?.(parseFloat(e.target.value))}
+            />
+          </label>
+        </div>
+      )}
 
       <div className="border-t border-neutral-200 pt-4 text-xs text-neutral-500 leading-relaxed">
         Drag to move. Click an object then drag the rotate handle to turn it.

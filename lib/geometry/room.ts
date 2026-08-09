@@ -18,15 +18,36 @@ export function pointInRoom(point: { x: number; y: number }, boundary: RoomBound
   return inside;
 }
 
+/** Plain min/max bounding box over a set of polygon points. */
+export function polygonBoundingBox(points: { x: number; y: number }[]): {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  width: number;
+  height: number;
+} {
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+  return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+}
+
 /**
  * Checks whether a shape is fully within the room boundary. Samples the
- * shape's corners (rect) or 8 perimeter points + center (circle) — an exact
- * closed-form circle-vs-polygon containment test isn't needed since MVP room
- * boundaries are simple convex rectangles.
+ * shape's corners (rect), 8 perimeter points + center (circle), or every
+ * vertex (polygon) — an exact closed-form circle-vs-polygon containment
+ * test isn't needed since MVP room boundaries are simple convex rectangles.
  */
 export function shapeFullyInRoom(shape: Shape, boundary: RoomBoundaryPoint[]): boolean {
   if (shape.kind === "rect") {
     return rectCorners(shape).every((c) => pointInRoom(c, boundary));
+  }
+  if (shape.kind === "polygon") {
+    return shape.points.every((p) => pointInRoom(p, boundary));
   }
   const samples: { x: number; y: number }[] = [{ x: shape.cx, y: shape.cy }];
   const steps = 8;

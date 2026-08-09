@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { validateLayout } from "@/lib/geometry/validate";
-import { EquipmentItem, LayoutObject, RoomBoundaryPoint } from "@/lib/geometry/types";
+import { EquipmentItem, LayoutObject, RoomBoundaryPoint, RoomFeatureRecord, roomFeatureToObstacle } from "@/lib/geometry/types";
 import { getSession } from "@/lib/auth/getSession";
 import { canEdit, forbidden } from "@/lib/auth/roles";
 
@@ -19,7 +19,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   const layout = await prisma.layout.findUnique({
     where: { id },
-    include: { objects: true, event: { include: { roomTemplate: true } } },
+    include: { objects: true, event: { include: { roomTemplate: { include: { features: true } } } } },
   });
 
   // Treat "exists but belongs to another org" the same as "doesn't exist" —
@@ -40,6 +40,23 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       widthFt: room.widthFt,
       lengthFt: room.lengthFt,
       boundary: room.boundaryJson,
+      features: room.features.map((f) => ({
+        id: f.id,
+        type: f.type,
+        shape: f.shape,
+        x: f.x,
+        y: f.y,
+        widthIn: f.widthIn,
+        lengthIn: f.lengthIn,
+        diameterIn: f.diameterIn,
+        rotation: f.rotation,
+        blocksPlacement: f.blocksPlacement,
+        metadata: f.metadata,
+      })),
+      backgroundImageUrl: room.backgroundImageUrl,
+      backgroundImageWidthPx: room.backgroundImageWidthPx,
+      backgroundImageHeightPx: room.backgroundImageHeightPx,
+      backgroundImagePxPerInch: room.backgroundImagePxPerInch,
     },
     equipment,
     objects: layout.objects.map((o) => ({
@@ -99,6 +116,13 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   if (!layout || layout.event.roomTemplate.orgId !== session.orgId) {
     return Response.json({ error: "Layout not found" }, { status: 404 });
   }
+
+  const features = await prisma.roomFeature.findMany({
+    where: { roomTemplateId: layout.event.roomTemplateId },
+  });
+  const obstacles = features.map((f) =>
+    roomFeatureToObstacle(f as unknown as RoomFeatureRecord)
+  );
 
   const equipmentItems = await prisma.equipmentItem.findMany({
     where: { orgId: layout.event.roomTemplate.orgId },
@@ -163,7 +187,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     .filter((u): u is { object: LayoutObject; item: EquipmentItem; children: { object: LayoutObject; item: EquipmentItem }[] } => u !== null);
 
   const boundary = layout.event.roomTemplate.boundaryJson as unknown as RoomBoundaryPoint[];
-  const issues = validateLayout(units, boundary);
+  const issues = validateLayout(units, boundary, obstacles);
 
   await prisma.$transaction([
     prisma.layoutObject.deleteMany({ where: { layoutId: id } }),

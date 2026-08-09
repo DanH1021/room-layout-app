@@ -1,8 +1,8 @@
-import { EquipmentItem, LayoutObject, RoomBoundaryPoint } from "@/lib/geometry/types";
+import { EquipmentItem, LayoutObject, Obstacle, RoomBoundaryPoint } from "@/lib/geometry/types";
 import { CircleShape, Shape, circleVsCircle, rectCorners, shapesOverlap } from "@/lib/geometry/collision";
 import { shapeFullyInRoom } from "@/lib/geometry/room";
 
-export type IssueType = "collision" | "clearance_conflict" | "room_boundary";
+export type IssueType = "collision" | "clearance_conflict" | "room_boundary" | "obstacle_collision";
 export type IssueSeverity = "error" | "warning";
 
 export interface LayoutIssue {
@@ -41,7 +41,8 @@ export function farthestPointDistance(shape: Shape, from: { x: number; y: number
   if (shape.kind === "circle") {
     return Math.hypot(shape.cx - from.x, shape.cy - from.y) + shape.radius;
   }
-  return Math.max(...rectCorners(shape).map((c) => Math.hypot(c.x - from.x, c.y - from.y)));
+  const points = shape.kind === "polygon" ? shape.points : rectCorners(shape);
+  return Math.max(...points.map((c) => Math.hypot(c.x - from.x, c.y - from.y)));
 }
 
 interface Unit {
@@ -66,7 +67,8 @@ interface Unit {
  */
 export function validateLayout(
   units: { object: LayoutObject; item: EquipmentItem; children?: { object: LayoutObject; item: EquipmentItem }[] }[],
-  boundary: RoomBoundaryPoint[]
+  boundary: RoomBoundaryPoint[],
+  obstacles: Obstacle[] = []
 ): LayoutIssue[] {
   const issues: LayoutIssue[] = [];
 
@@ -115,6 +117,19 @@ export function validateLayout(
         description: `${a.item.name} extends outside the room boundary.`,
         objectIds: [a.object.id],
       });
+    }
+
+    for (const obstacle of obstacles) {
+      if (obstacle.blocksPlacement === false) continue;
+      if (shapesOverlap(a.bareShape, obstacle.shape)) {
+        issues.push({
+          id: `obstacle-${a.object.id}-${obstacle.id}`,
+          type: "obstacle_collision",
+          severity: "error",
+          description: `${a.item.name} overlaps ${obstacle.name}.`,
+          objectIds: [a.object.id],
+        });
+      }
     }
 
     for (let j = i + 1; j < resolved.length; j++) {

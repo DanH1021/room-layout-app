@@ -1,0 +1,162 @@
+// Room Layout Program — MVP schema.
+// Mirrors Section 5 of architecture/mvp-technical-architecture.md exactly.
+// Dimensions are stored in inches for precision; converted to feet/meters
+// only at display time.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Organization {
+  id             String         @id @default(cuid())
+  name           String
+  users          User[]
+  equipmentItems EquipmentItem[]
+  roomTemplates  RoomTemplate[]
+  clients        Client[]
+}
+
+model User {
+  id           String       @id @default(cuid())
+  orgId        String
+  organization Organization @relation(fields: [orgId], references: [id])
+  email        String       @unique
+  name         String
+  role         String       @default("salesperson") // administrator | sales_manager | salesperson | operations | read_only
+  // scrypt hash, format "<saltHex>:<hashHex>" — see lib/auth/password.ts.
+  // Self-hosted email/password auth for now (see milestone doc); swapping to
+  // Supabase Auth later would replace this column's role, not the User
+  // model's shape, since orgId/role/email stay the same either way.
+  passwordHash String
+  createdAt    DateTime     @default(now())
+}
+
+model EquipmentItem {
+  id                String       @id @default(cuid())
+  orgId             String
+  organization      Organization @relation(fields: [orgId], references: [id])
+  name              String // "60\" Round Table"
+  category          String // table | chair | bar | stage | dance_floor | av | decor | other
+  shape             String // "rect" | "circle"
+  widthIn           Float?
+  lengthIn          Float?
+  diameterIn        Float?
+  defaultChairCount Int?
+  clearanceIn       Float   @default(0) // required clearance around the object
+  rotatable         Boolean @default(true)
+  stackable         Boolean @default(true)
+  iconUrl           String?
+  inventoryQty      Int?
+  notes             String?
+  color             String  @default("#c8a76b") // MVP rendering fill color
+}
+
+model RoomTemplate {
+  id              String        @id @default(cuid())
+  orgId           String
+  organization    Organization  @relation(fields: [orgId], references: [id])
+  venueName       String
+  roomName        String
+  widthFt         Float
+  lengthFt        Float
+  ceilingHeightFt Float?
+  boundaryJson    Json // polygon points defining the room shape, in inches
+  features        RoomFeature[]
+  events          Event[]
+  createdAt       DateTime      @default(now())
+}
+
+model RoomFeature {
+  id             String       @id @default(cuid())
+  roomTemplateId String
+  roomTemplate   RoomTemplate @relation(fields: [roomTemplateId], references: [id])
+  type           String // wall | door | window | column | stairs | permanent_bar | kitchen_entrance
+  // | restroom | emergency_exit | electrical | av_connection | screen | other
+  x        Float
+  y        Float
+  widthIn  Float?
+  lengthIn Float?
+  rotation Float @default(0)
+  metadata Json?
+}
+
+model Client {
+  id           String       @id @default(cuid())
+  orgId        String
+  organization Organization @relation(fields: [orgId], references: [id])
+  name         String
+  events       Event[]
+}
+
+model Event {
+  id               String       @id @default(cuid())
+  orgId            String
+  clientId         String
+  client           Client       @relation(fields: [clientId], references: [id])
+  name             String // "Jensen Wedding"
+  eventDate        DateTime
+  roomTemplateId   String
+  roomTemplate     RoomTemplate @relation(fields: [roomTemplateId], references: [id])
+  guestCountTarget Int?
+  layouts          Layout[]
+  createdAt        DateTime     @default(now())
+}
+
+model Layout {
+  id             String             @id @default(cuid())
+  eventId        String
+  event          Event              @relation(fields: [eventId], references: [id])
+  name           String // "Layout 01", "FINAL"
+  status         String             @default("draft") // draft | final | client_approved
+  guestCount     Int?
+  seatingStyle   String? // rounds | family_style | cocktail | etc.
+  createdBy      String // userId
+  objects        LayoutObject[]
+  issues         LayoutIssue[]
+  aiInteractions AIInteractionLog[]
+  notes          String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+}
+
+model LayoutObject {
+  id              String   @id @default(cuid())
+  layoutId        String
+  layout          Layout   @relation(fields: [layoutId], references: [id])
+  equipmentItemId String? // null for ad-hoc/custom objects
+  parentObjectId  String? // e.g. a chair's parent table, so moving the table moves its chairs
+  shape           String // "rect" | "circle"
+  x               Float
+  y               Float
+  rotation        Float    @default(0)
+  widthIn         Float?
+  lengthIn        Float?
+  diameterIn      Float?
+  zIndex          Int      @default(0)
+  metadata        Json? // e.g. chair index around a table, label overrides
+}
+
+model LayoutIssue {
+  id          String   @id @default(cuid())
+  layoutId    String
+  layout      Layout   @relation(fields: [layoutId], references: [id])
+  type        String // collision | clearance_conflict | exit_overlap | inventory_shortfall
+  severity    String // error | warning
+  description String
+  objectIds   Json // array of related LayoutObject ids
+  createdAt   DateTime @default(now())
+}
+
+model AIInteractionLog {
+  id                     String   @id @default(cuid())
+  layoutId               String
+  layout                 Layout   @relation(fields: [layoutId], references: [id])
+  prompt                 String
+  structuredResponseJson Json
+  provider               String // "claude" | "openai"
+  createdAt              DateTime @default(now())
+}

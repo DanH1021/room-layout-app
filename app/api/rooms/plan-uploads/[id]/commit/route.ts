@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth/getSession";
 import { canManageOrgSettings, forbidden } from "@/lib/auth/roles";
-import { isConvexPolygon } from "@/lib/geometry/collision";
+import { isConvexPolygon, isSimplePolygon } from "@/lib/geometry/collision";
 import { polygonBoundingBox } from "@/lib/geometry/room";
 
 const commitSchema = z.object({
@@ -58,6 +58,16 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return Response.json({ error: parsed.error.flatten() }, { status: 400 });
   }
   const { venueName, roomName, ceilingHeightFt, boundary, obstacles } = parsed.data;
+
+  if (!isSimplePolygon(boundary)) {
+    return Response.json(
+      {
+        error:
+          "The room boundary crosses over itself — check for a corner that got dragged past another wall, then try again.",
+      },
+      { status: 400 }
+    );
+  }
 
   for (let i = 0; i < obstacles.length; i++) {
     const o = obstacles[i];

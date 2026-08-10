@@ -5,6 +5,7 @@ import { EquipmentItem } from "@/lib/geometry/types";
 interface ToolbarProps {
   equipment: EquipmentItem[];
   onAdd: (equipmentItemId: string) => void;
+  armedEquipmentId: string | null;
   onDuplicate: () => void;
   onDelete: () => void;
   hasSelection: boolean;
@@ -29,6 +30,7 @@ interface ToolbarProps {
 export function Toolbar({
   equipment,
   onAdd,
+  armedEquipmentId,
   onDuplicate,
   onDelete,
   hasSelection,
@@ -53,20 +55,31 @@ export function Toolbar({
     <div className="flex flex-col gap-4 w-64 shrink-0 border-r border-neutral-200 bg-neutral-50 p-4 h-full overflow-y-auto">
       <div>
         <h2 className="text-sm font-semibold text-neutral-700 mb-2">Add Equipment</h2>
+        <p className="text-xs text-neutral-500 mb-2">
+          Click a type, then click the room to place it. Click the button again to stop.
+        </p>
         <div className="flex flex-col gap-1.5">
-          {equipment.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => onAdd(item.id)}
-              className="text-left text-sm px-3 py-2 rounded-md bg-white border border-neutral-200 hover:border-neutral-400 hover:bg-neutral-100 transition-colors flex items-center gap-2"
-            >
-              <span
-                className="inline-block w-3 h-3 rounded-sm shrink-0"
-                style={{ backgroundColor: item.color }}
-              />
-              {item.name}
-            </button>
-          ))}
+          {equipment.map((item) => {
+            const armed = armedEquipmentId === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => onAdd(item.id)}
+                className={`text-left text-sm px-3 py-2 rounded-md border transition-colors flex items-center gap-2 ${
+                  armed
+                    ? "bg-blue-50 border-blue-500 ring-1 ring-blue-500 text-blue-900"
+                    : "bg-white border-neutral-200 hover:border-neutral-400 hover:bg-neutral-100"
+                }`}
+              >
+                <span
+                  className="inline-block w-3 h-3 rounded-sm shrink-0"
+                  style={{ backgroundColor: item.color }}
+                />
+                {item.name}
+                {armed && <span className="ml-auto text-[10px] font-semibold uppercase text-blue-600">Placing…</span>}
+              </button>
+            );
+          })}
         </div>
       </div>
 

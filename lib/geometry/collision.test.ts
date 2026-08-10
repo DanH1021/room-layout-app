@@ -7,6 +7,7 @@ import {
   convexPolygonVsConvexPolygon,
   circleVsConvexPolygon,
   isConvexPolygon,
+  isSimplePolygon,
   shapesOverlap,
 } from "@/lib/geometry/collision";
 import { withClearance } from "@/lib/geometry/clearance";
@@ -273,6 +274,54 @@ describe("isConvexPolygon", () => {
       { x: 0, y: 10 },
     ];
     expect(isConvexPolygon(lShape)).toBe(false);
+  });
+});
+
+describe("isSimplePolygon", () => {
+  it("returns true for a simple square", () => {
+    expect(
+      isSimplePolygon([
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 10, y: 10 },
+        { x: 0, y: 10 },
+      ])
+    ).toBe(true);
+  });
+
+  it("returns true for a legitimate concave L-shape / staircase (traced corridor)", () => {
+    const staircase = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 5 },
+      { x: 20, y: 5 },
+      { x: 20, y: 15 },
+      { x: 5, y: 15 },
+      { x: 5, y: 10 },
+      { x: 0, y: 10 },
+    ];
+    expect(isSimplePolygon(staircase)).toBe(true);
+  });
+
+  it("returns false for a self-intersecting bowtie/figure-8 polygon", () => {
+    // Two triangles crossed at the middle, like a bowtie: (0,0)->(10,10) and
+    // (10,0)->(0,10) cross each other in the middle of the shape.
+    const bowtie = [
+      { x: 0, y: 0 },
+      { x: 10, y: 10 },
+      { x: 10, y: 0 },
+      { x: 0, y: 10 },
+    ];
+    expect(isSimplePolygon(bowtie)).toBe(false);
+  });
+
+  it("returns false for fewer than 3 points", () => {
+    expect(
+      isSimplePolygon([
+        { x: 0, y: 0 },
+        { x: 10, y: 10 },
+      ])
+    ).toBe(false);
   });
 });
 

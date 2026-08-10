@@ -4,7 +4,7 @@ import { LayoutIssue } from "@/lib/geometry/validate";
 
 interface IssuePanelProps {
   issues: LayoutIssue[];
-  onFocusIssue: (objectId: string) => void;
+  onFocusIssue: (objectIds: string[]) => void;
 }
 
 export function IssuePanel({ issues, onFocusIssue }: IssuePanelProps) {
@@ -35,7 +35,7 @@ export function IssuePanel({ issues, onFocusIssue }: IssuePanelProps) {
           <li
             key={issue.id}
             className="px-3 py-2 border-b border-neutral-100 last:border-b-0 hover:bg-neutral-50 cursor-pointer flex items-start gap-2"
-            onClick={() => onFocusIssue(issue.objectIds[0])}
+            onClick={() => onFocusIssue(issue.objectIds)}
           >
             <span
               className={`mt-0.5 inline-block w-2 h-2 rounded-full shrink-0 ${

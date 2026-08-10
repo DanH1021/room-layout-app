@@ -200,6 +200,74 @@ export function isConvexPolygon(points: { x: number; y: number }[]): boolean {
   return true;
 }
 
+/**
+ * Standard segment-segment intersection test (excluding shared-endpoint
+ * touches, which are expected between adjacent polygon edges and must not
+ * count as a self-intersection).
+ */
+function segmentsIntersect(p1: Vec2, p2: Vec2, p3: Vec2, p4: Vec2): boolean {
+  function orientation(a: Vec2, b: Vec2, c: Vec2): number {
+    const val = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    if (Math.abs(val) < 1e-9) return 0;
+    return val > 0 ? 1 : -1;
+  }
+  function onSegment(a: Vec2, b: Vec2, c: Vec2): boolean {
+    // c is known to be collinear with a-b; check it falls within the segment's bbox.
+    return (
+      Math.min(a.x, b.x) - 1e-9 <= c.x &&
+      c.x <= Math.max(a.x, b.x) + 1e-9 &&
+      Math.min(a.y, b.y) - 1e-9 <= c.y &&
+      c.y <= Math.max(a.y, b.y) + 1e-9
+    );
+  }
+
+  const o1 = orientation(p1, p2, p3);
+  const o2 = orientation(p1, p2, p4);
+  const o3 = orientation(p3, p4, p1);
+  const o4 = orientation(p3, p4, p2);
+
+  if (o1 !== o2 && o3 !== o4) return true;
+
+  // Collinear special cases: segments overlap along the same line.
+  if (o1 === 0 && onSegment(p1, p2, p3)) return true;
+  if (o2 === 0 && onSegment(p1, p2, p4)) return true;
+  if (o3 === 0 && onSegment(p3, p4, p1)) return true;
+  if (o4 === 0 && onSegment(p3, p4, p2)) return true;
+
+  return false;
+}
+
+/**
+ * Checks whether a closed polygon is "simple" — i.e. none of its edges cross
+ * each other. Concave (non-convex) polygons are fine and expected (e.g. an
+ * L-shaped traced room); this only rejects self-intersecting shapes like a
+ * bowtie/figure-8, where a corner got dragged across another edge while
+ * tracing. O(n^2) edge-pair comparison, which is fine for the small vertex
+ * counts room boundaries have (capped at 60 points).
+ */
+export function isSimplePolygon(points: { x: number; y: number }[]): boolean {
+  const n = points.length;
+  if (n < 3) return false;
+
+  for (let i = 0; i < n; i++) {
+    const a1 = points[i];
+    const a2 = points[(i + 1) % n];
+    for (let j = i + 1; j < n; j++) {
+      // Skip the edge itself and edges adjacent to it (they share an
+      // endpoint by construction, which isn't a self-intersection).
+      // Edges sharing an endpoint (the next edge in the loop, or the
+      // wraparound pair edge[0]/edge[n-1]) are adjacent by construction and
+      // must not be flagged as an intersection.
+      const isAdjacent = j === i + 1 || (i === 0 && j === n - 1);
+      if (isAdjacent) continue;
+      const b1 = points[j];
+      const b2 = points[(j + 1) % n];
+      if (segmentsIntersect(a1, a2, b1, b2)) return false;
+    }
+  }
+  return true;
+}
+
 /** Dispatches to the correct pairwise test based on shape kind. */
 export function shapesOverlap(a: Shape, b: Shape): boolean {
   if (a.kind === "rect" && b.kind === "rect") return rectVsRect(a, b);

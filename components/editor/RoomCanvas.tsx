@@ -56,7 +56,8 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [armedEquipmentId, setArmedEquipmentId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [showGrid, setShowGrid] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
@@ -150,15 +151,14 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   useEffect(() => {
     const tr = transformerRef.current;
     if (!tr) return;
-    if (selectedId && groupRefs.current[selectedId]) {
-      tr.nodes([groupRefs.current[selectedId]]);
-      tr.getLayer()?.batchDraw();
-    } else {
-      tr.nodes([]);
-    }
-  }, [selectedId, objects]);
+    const nodes = Array.from(selectedIds)
+      .map((id) => groupRefs.current[id])
+      .filter((n): n is Konva.Group => !!n);
+    tr.nodes(nodes);
+    tr.getLayer()?.batchDraw();
+  }, [selectedIds, objects]);
 
-  // Keyboard shortcuts: delete, duplicate, save.
+  // Keyboard shortcuts: delete, duplicate, save, escape (disarm placement).
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       const tag = (e.target as HTMLElement)?.tagName;
@@ -166,18 +166,21 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         saveLayout();
-      } else if ((e.key === "Delete" || e.key === "Backspace") && selectedId) {
+      } else if ((e.key === "Delete" || e.key === "Backspace") && selectedIds.size > 0) {
         e.preventDefault();
         deleteSelected();
-      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d" && selectedId) {
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d" && selectedIds.size > 0) {
         e.preventDefault();
         duplicateSelected();
+      } else if (e.key === "Escape" && armedEquipmentId) {
+        e.preventDefault();
+        setArmedEquipmentId(null);
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, objects, saveLayout]);
+  }, [selectedIds, objects, saveLayout, armedEquipmentId]);
 
   const parents = useMemo(() => objects.filter((o) => !o.parentObjectId), [objects]);
   const childrenByParent = useMemo(() => {
@@ -242,16 +245,23 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
     y: Math.max(STAGE_PADDING_PX, (containerSize.height - roomLengthPx) / 2),
   };
 
-  function addEquipment(equipmentItemId: string) {
-    // Object coordinates live in the same absolute room space as the
-    // boundary polygon, so the center point must be offset by the bounding
-    // box's origin — not just half its width/height — for rooms that don't
-    // start at (0,0).
-    const centerX = boundingBox.minX + roomWidthIn / 2 + (Math.random() * 24 - 12);
-    const centerY = boundingBox.minY + roomLengthIn / 2 + (Math.random() * 24 - 12);
-    const newObjects = instantiateEquipment(equipmentItemId, centerX, centerY, getEquipmentItem);
+  // Clicking a toolbar button arms placement mode for that equipment type
+  // (rather than immediately adding it near the room center). Clicking the
+  // already-armed button again disarms it; clicking a different button
+  // switches the armed type.
+  function armEquipment(equipmentItemId: string) {
+    setArmedEquipmentId((prev) => (prev === equipmentItemId ? null : equipmentItemId));
+  }
+
+  // Places one instance of the currently-armed equipment centered at the
+  // given room-space point (inches), snapping to the grid same as dragging.
+  function placeArmedEquipmentAt(xIn: number, yIn: number) {
+    if (!armedEquipmentId) return;
+    const centerX = snap(xIn);
+    const centerY = snap(yIn);
+    const newObjects = instantiateEquipment(armedEquipmentId, centerX, centerY, getEquipmentItem);
     setObjects((prev) => [...prev, ...newObjects]);
-    setSelectedId(newObjects[0].id);
+    setSelectedIds(new Set([newObjects[0].id]));
   }
 
   function updateObject(id: string, changes: Partial<LayoutObject>) {
@@ -259,33 +269,34 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   }
 
   function duplicateSelected() {
-    if (!selectedId) return;
-    const parent = objects.find((o) => o.id === selectedId);
-    if (!parent) return;
-    const idMap: Record<string, string> = { [parent.id]: uuid() };
+    if (selectedIds.size === 0) return;
+    const newParents: LayoutObject[] = [];
+    const newChildren: LayoutObject[] = [];
     const offsetIn = 12; // 1ft offset so the duplicate is visibly distinct
-    const newParent: LayoutObject = {
-      ...parent,
-      id: idMap[parent.id],
-      x: parent.x + offsetIn,
-      y: parent.y + offsetIn,
-    };
-    const children = childrenByParent[parent.id] ?? [];
-    const newChildren = children.map((c) => ({
-      ...c,
-      id: uuid(),
-      parentObjectId: newParent.id,
-    }));
-    setObjects((prev) => [...prev, newParent, ...newChildren]);
-    setSelectedId(newParent.id);
+    for (const selectedId of selectedIds) {
+      const parent = objects.find((o) => o.id === selectedId);
+      if (!parent) continue;
+      const newId = uuid();
+      newParents.push({
+        ...parent,
+        id: newId,
+        x: parent.x + offsetIn,
+        y: parent.y + offsetIn,
+      });
+      const children = childrenByParent[parent.id] ?? [];
+      for (const c of children) {
+        newChildren.push({ ...c, id: uuid(), parentObjectId: newId });
+      }
+    }
+    if (newParents.length === 0) return;
+    setObjects((prev) => [...prev, ...newParents, ...newChildren]);
+    setSelectedIds(new Set(newParents.map((p) => p.id)));
   }
 
   function deleteSelected() {
-    if (!selectedId) return;
-    setObjects((prev) =>
-      prev.filter((o) => o.id !== selectedId && o.parentObjectId !== selectedId)
-    );
-    setSelectedId(null);
+    if (selectedIds.size === 0) return;
+    setObjects((prev) => prev.filter((o) => !selectedIds.has(o.id) && !(o.parentObjectId && selectedIds.has(o.parentObjectId))));
+    setSelectedIds(new Set());
   }
 
   const gridStep = feetToInches(1);
@@ -326,10 +337,11 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
     <div className="flex h-full w-full">
       <Toolbar
         equipment={equipmentList}
-        onAdd={addEquipment}
+        onAdd={armEquipment}
+        armedEquipmentId={armedEquipmentId}
         onDuplicate={duplicateSelected}
         onDelete={deleteSelected}
-        hasSelection={!!selectedId}
+        hasSelection={selectedIds.size > 0}
         zoom={zoom}
         onZoomChange={setZoom}
         showGrid={showGrid}
@@ -369,7 +381,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
             Log out
           </button>
         </div>
-        <IssuePanel issues={issues} onFocusIssue={(id) => setSelectedId(id)} />
+        <IssuePanel issues={issues} onFocusIssue={(ids) => setSelectedIds(new Set(ids))} />
         <AICommandBar
           layoutId={layoutId}
           objects={objects}
@@ -377,15 +389,37 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
           room={{ widthFt: room.widthFt, lengthFt: room.lengthFt }}
           onApply={(newObjects) => {
             setObjects(newObjects);
-            setSelectedId(null);
+            setSelectedIds(new Set());
           }}
         />
+        {armedEquipmentId && (
+          <div className="absolute top-12 left-1/2 -translate-x-1/2 z-10 bg-blue-600 text-white text-xs px-3 py-1.5 rounded-full shadow-sm">
+            Click to place: {getEquipmentItem(armedEquipmentId).name} — press Esc to cancel
+          </div>
+        )}
         <Stage
           width={containerSize.width}
           height={containerSize.height}
           draggable
+          style={armedEquipmentId ? { cursor: "crosshair" } : undefined}
           onClick={(e) => {
-            if (e.target === e.target.getStage()) setSelectedId(null);
+            if (e.target !== e.target.getStage()) return;
+            if (armedEquipmentId) {
+              const stage = e.target.getStage();
+              const pointer = stage?.getPointerPosition();
+              if (!stage || !pointer) return;
+              // Stage itself is draggable (pan), so its own x/y offset must be
+              // subtracted in addition to the fixed stageOffset the content
+              // Layer is positioned at — same math as the drag handlers use
+              // implicitly via Konva's local node coordinates.
+              const localPx = pointer.x - stage.x() - stageOffset.x;
+              const localPy = pointer.y - stage.y() - stageOffset.y;
+              const xIn = boundingBox.minX + pxToInches(localPx, zoom);
+              const yIn = boundingBox.minY + pxToInches(localPy, zoom);
+              placeArmedEquipmentAt(xIn, yIn);
+            } else {
+              setSelectedIds(new Set());
+            }
           }}
         >
           {showBackground && room.backgroundImageUrl && bgImage && (
@@ -474,17 +508,24 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
                   ref={(node) => {
                     if (node) groupRefs.current[parent.id] = node;
                   }}
-                  x={inchesToPx(parent.x, zoom)}
-                  y={inchesToPx(parent.y, zoom)}
+                  x={inchesToPx(parent.x - boundingBox.minX, zoom)}
+                  y={inchesToPx(parent.y - boundingBox.minY, zoom)}
                   rotation={parent.rotation}
                   draggable
                   onClick={(e) => {
                     e.cancelBubble = true;
-                    setSelectedId(parent.id);
+                    const toggle = e.evt.ctrlKey || e.evt.metaKey;
+                    setSelectedIds((prev) => {
+                      if (!toggle) return new Set([parent.id]);
+                      const next = new Set(prev);
+                      if (next.has(parent.id)) next.delete(parent.id);
+                      else next.add(parent.id);
+                      return next;
+                    });
                   }}
                   onTap={(e) => {
                     e.cancelBubble = true;
-                    setSelectedId(parent.id);
+                    setSelectedIds(new Set([parent.id]));
                   }}
                   onDragMove={(e) => {
                     // Live feedback while dragging, before release — updates
@@ -492,16 +533,16 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
                     // highlighting) continuously, not just on drop.
                     const node = e.target;
                     updateObject(parent.id, {
-                      x: pxToInches(node.x(), zoom),
-                      y: pxToInches(node.y(), zoom),
+                      x: boundingBox.minX + pxToInches(node.x(), zoom),
+                      y: boundingBox.minY + pxToInches(node.y(), zoom),
                     });
                   }}
                   onDragEnd={(e) => {
                     const node = e.target;
-                    const xIn = snap(pxToInches(node.x(), zoom));
-                    const yIn = snap(pxToInches(node.y(), zoom));
-                    node.x(inchesToPx(xIn, zoom));
-                    node.y(inchesToPx(yIn, zoom));
+                    const xIn = snap(boundingBox.minX + pxToInches(node.x(), zoom));
+                    const yIn = snap(boundingBox.minY + pxToInches(node.y(), zoom));
+                    node.x(inchesToPx(xIn - boundingBox.minX, zoom));
+                    node.y(inchesToPx(yIn - boundingBox.minY, zoom));
                     updateObject(parent.id, { x: xIn, y: yIn });
                   }}
                   onTransform={(e) => {

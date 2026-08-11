@@ -82,8 +82,8 @@ export default function RoomsPage() {
         <div>
           <h1 className="text-lg font-semibold text-neutral-800 mb-1">New Room</h1>
           <p className="text-xs text-neutral-500 mb-3">
-            The MVP creates a simple rectangular room from width and length. Tracing an irregular boundary
-            (columns, alcoves, angled walls) from a floor plan is a later phase.
+            Enter a simple rectangular room by width and length below, or upload a floor plan (PDF or photo)
+            to trace an irregular boundary — columns, alcoves, and angled walls included.
           </p>
           {user && canManage && (
             <Link

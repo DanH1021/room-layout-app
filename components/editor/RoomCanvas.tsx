@@ -14,6 +14,8 @@ import { validateLayout, IssueSeverity, LayoutIssue } from "@/lib/geometry/valid
 import { computeCapacity } from "@/lib/geometry/capacity";
 import { v4 as uuid } from "uuid";
 import Link from "next/link";
+import { useCurrentUser } from "@/lib/auth/useCurrentUser";
+import { canEdit } from "@/lib/auth/roles";
 
 const STAGE_PADDING_PX = 80;
 
@@ -50,6 +52,14 @@ function nullsToUndefined<T extends object>(obj: T): T {
 }
 
 export default function RoomCanvas({ layoutId }: { layoutId: string }) {
+  // The API routes are the real security boundary (see lib/auth/roles.ts /
+  // canEdit) — this only hides/disables controls a read_only user couldn't
+  // use anyway, so they get a clean viewing experience instead of clicking
+  // things that silently 403. While the session is still loading, default to
+  // editable rather than flashing a disabled UI for the common case.
+  const currentUser = useCurrentUser();
+  const readOnly = currentUser ? !canEdit(currentUser.role) : false;
+
   const [room, setRoom] = useState<RoomTemplate | null>(null);
   const [equipmentList, setEquipmentList] = useState<EquipmentItem[]>([]);
   const [objects, setObjects] = useState<LayoutObject[]>([]);
@@ -108,6 +118,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   );
 
   const saveLayout = useCallback(async () => {
+    if (readOnly) return false;
     setSaveStatus("saving");
     try {
       const res = await fetch(`/api/layouts/${layoutId}`, {
@@ -124,17 +135,21 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
       setSaveStatus("error");
       return false;
     }
-  }, [objects, layoutId]);
+  }, [objects, layoutId, readOnly]);
 
   // The PDF route reads the layout straight from the database (so the export
   // matches exactly what the /export-pdf link would produce if reloaded or
   // shared), so export always saves first — otherwise a printed PDF could
   // silently omit unsaved on-screen changes.
   const exportPdf = useCallback(async () => {
-    const saved = await saveLayout();
-    if (!saved) return;
+    // Read-only users can't save (nothing to save — they can't edit), but
+    // they can still export whatever was last saved to the database.
+    if (!readOnly) {
+      const saved = await saveLayout();
+      if (!saved) return;
+    }
     window.open(`/api/layouts/${layoutId}/export-pdf`, "_blank");
-  }, [saveLayout, layoutId]);
+  }, [saveLayout, layoutId, readOnly]);
 
   useEffect(() => {
     function measure() {
@@ -165,13 +180,13 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
-        saveLayout();
+        if (!readOnly) saveLayout();
       } else if ((e.key === "Delete" || e.key === "Backspace") && selectedIds.size > 0) {
         e.preventDefault();
-        deleteSelected();
+        if (!readOnly) deleteSelected();
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "d" && selectedIds.size > 0) {
         e.preventDefault();
-        duplicateSelected();
+        if (!readOnly) duplicateSelected();
       } else if (e.key === "Escape" && armedEquipmentId) {
         e.preventDefault();
         setArmedEquipmentId(null);
@@ -180,7 +195,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedIds, objects, saveLayout, armedEquipmentId]);
+  }, [selectedIds, objects, saveLayout, armedEquipmentId, readOnly]);
 
   const parents = useMemo(() => objects.filter((o) => !o.parentObjectId), [objects]);
   const childrenByParent = useMemo(() => {
@@ -250,13 +265,14 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   // already-armed button again disarms it; clicking a different button
   // switches the armed type.
   function armEquipment(equipmentItemId: string) {
+    if (readOnly) return;
     setArmedEquipmentId((prev) => (prev === equipmentItemId ? null : equipmentItemId));
   }
 
   // Places one instance of the currently-armed equipment centered at the
   // given room-space point (inches), snapping to the grid same as dragging.
   function placeArmedEquipmentAt(xIn: number, yIn: number) {
-    if (!armedEquipmentId) return;
+    if (!armedEquipmentId || readOnly) return;
     const centerX = snap(xIn);
     const centerY = snap(yIn);
     const newObjects = instantiateEquipment(armedEquipmentId, centerX, centerY, getEquipmentItem);
@@ -269,7 +285,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   }
 
   function duplicateSelected() {
-    if (selectedIds.size === 0) return;
+    if (selectedIds.size === 0 || readOnly) return;
     const newParents: LayoutObject[] = [];
     const newChildren: LayoutObject[] = [];
     const offsetIn = 12; // 1ft offset so the duplicate is visibly distinct
@@ -294,7 +310,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   }
 
   function deleteSelected() {
-    if (selectedIds.size === 0) return;
+    if (selectedIds.size === 0 || readOnly) return;
     setObjects((prev) => prev.filter((o) => !selectedIds.has(o.id) && !(o.parentObjectId && selectedIds.has(o.parentObjectId))));
     setSelectedIds(new Set());
   }
@@ -336,6 +352,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   return (
     <div className="flex h-full w-full">
       <Toolbar
+        readOnly={readOnly}
         equipment={equipmentList}
         onAdd={armEquipment}
         armedEquipmentId={armedEquipmentId}
@@ -370,6 +387,12 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
           </span>
           <span className="text-neutral-400">|</span>
           <span>{capacity} seats placed</span>
+          {readOnly && (
+            <>
+              <span className="text-neutral-400">|</span>
+              <span className="text-amber-700 font-medium">View only</span>
+            </>
+          )}
           <span className="text-neutral-400">|</span>
           <button
             onClick={async () => {
@@ -382,16 +405,18 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
           </button>
         </div>
         <IssuePanel issues={issues} onFocusIssue={(ids) => setSelectedIds(new Set(ids))} />
-        <AICommandBar
-          layoutId={layoutId}
-          objects={objects}
-          getEquipmentItem={getEquipmentItem}
-          room={{ widthFt: room.widthFt, lengthFt: room.lengthFt }}
-          onApply={(newObjects) => {
-            setObjects(newObjects);
-            setSelectedIds(new Set());
-          }}
-        />
+        {!readOnly && (
+          <AICommandBar
+            layoutId={layoutId}
+            objects={objects}
+            getEquipmentItem={getEquipmentItem}
+            room={{ widthFt: room.widthFt, lengthFt: room.lengthFt }}
+            onApply={(newObjects) => {
+              setObjects(newObjects);
+              setSelectedIds(new Set());
+            }}
+          />
+        )}
         {armedEquipmentId && (
           <div className="absolute top-12 left-1/2 -translate-x-1/2 z-10 bg-blue-600 text-white text-xs px-3 py-1.5 rounded-full shadow-sm">
             Click to place: {getEquipmentItem(armedEquipmentId).name} — press Esc to cancel
@@ -511,7 +536,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
                   x={inchesToPx(parent.x - boundingBox.minX, zoom)}
                   y={inchesToPx(parent.y - boundingBox.minY, zoom)}
                   rotation={parent.rotation}
-                  draggable
+                  draggable={!readOnly}
                   onClick={(e) => {
                     e.cancelBubble = true;
                     const toggle = e.evt.ctrlKey || e.evt.metaKey;
@@ -576,7 +601,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
 
             <Transformer
               ref={transformerRef}
-              rotateEnabled
+              rotateEnabled={!readOnly}
               resizeEnabled={false}
               anchorSize={8}
               borderStroke="#2563eb"

@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { withSentryConfig } from "@sentry/nextjs";
 
 const nextConfig: NextConfig = {
   // pdf-to-img (lib/pdf/rasterizePlan.ts) wraps pdfjs-dist, which resolves
@@ -27,4 +28,18 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+// withSentryConfig wraps the build to also upload source maps to Sentry (so
+// stack traces in the dashboard show real code, not minified output) — but
+// that upload step only runs when SENTRY_ORG/SENTRY_PROJECT/SENTRY_AUTH_TOKEN
+// are set. Without them it's a documented no-op wrapper: the build proceeds
+// normally, error reporting still works via instrumentation.ts/
+// instrumentation-client.ts (those only need NEXT_PUBLIC_SENTRY_DSN), you
+// just get minified stack traces in Sentry until the auth token is added.
+export default withSentryConfig(nextConfig, {
+  silent: true,
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  // Not disableLogger/webpack.treeshake.removeDebugLogging — both are
+  // webpack-only and this app builds with Turbopack (see build output).
+});

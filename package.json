@@ -15,6 +15,7 @@
     "@anthropic-ai/sdk": "^0.116.0",
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
+    "@sentry/nextjs": "^10.70.0",
     "@vercel/blob": "^2.7.0",
     "image-size": "^2.0.2",
     "jose": "^6.2.8",

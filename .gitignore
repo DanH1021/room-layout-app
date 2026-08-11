@@ -37,6 +37,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# database backups (scripts/backup-db.sh) — real production data, never commit
+/backups
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

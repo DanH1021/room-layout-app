@@ -230,3 +230,34 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
   return Response.json({ ok: true, issueCount: issues.length, savedAt: new Date().toISOString() });
 }
+
+
+/**
+ * DELETE has nothing to block on: a layout's objects, issues, and AI
+ * interaction logs belong exclusively to it (unlike a room's events or an
+ * event's layouts, which are reasons to block rather than cascade), so they
+ * cascade in one transaction along with the layout row itself.
+ */
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const session = await getSession();
+  if (!session) return Response.json({ error: "Not authenticated" }, { status: 401 });
+  if (!canEdit(session.role)) return forbidden("Read-only accounts can't delete layouts.");
+  const { id } = await params;
+
+  const layout = await prisma.layout.findUnique({
+    where: { id },
+    include: { event: { include: { roomTemplate: true } } },
+  });
+  if (!layout || layout.event.roomTemplate.orgId !== session.orgId) {
+    return Response.json({ error: "Layout not found" }, { status: 404 });
+  }
+
+  await prisma.$transaction([
+    prisma.aIInteractionLog.deleteMany({ where: { layoutId: id } }),
+    prisma.layoutIssue.deleteMany({ where: { layoutId: id } }),
+    prisma.layoutObject.deleteMany({ where: { layoutId: id } }),
+    prisma.layout.delete({ where: { id } }),
+  ]);
+
+  return Response.json({ ok: true });
+}

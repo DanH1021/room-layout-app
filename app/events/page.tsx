@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { TopNav } from "@/components/dashboard/TopNav";
+import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 
 interface RoomOption {
   id: string;
@@ -28,10 +29,13 @@ interface EventRow {
 }
 
 export default function EventsPage() {
+  const user = useCurrentUser();
+  const canDelete = user ? user.role !== "read_only" : false;
   const [events, setEvents] = useState<EventRow[] | null>(null);
   const [rooms, setRooms] = useState<RoomOption[]>([]);
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const [name, setName] = useState("");
   const [eventDate, setEventDate] = useState("");
@@ -98,6 +102,25 @@ export default function EventsPage() {
       setError(err instanceof Error ? err.message : "Couldn't create event");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleDelete(ev: EventRow) {
+    if (!window.confirm(`Delete "${ev.name}"? This can't be undone.`)) return;
+    setDeletingId(ev.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/events/${ev.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Delete failed (${res.status})`);
+      }
+      await loadAll();
+    } catch (err) {
+      console.error(err);
+      setError(err instanceof Error ? err.message : "Couldn't delete event");
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -223,6 +246,7 @@ export default function EventsPage() {
 
         <div>
           <h1 className="text-lg font-semibold text-neutral-800 mb-3">Events</h1>
+          {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
           {events === null ? (
             <p className="text-sm text-neutral-500">Loading…</p>
           ) : events.length === 0 ? (
@@ -230,23 +254,33 @@ export default function EventsPage() {
           ) : (
             <div className="flex flex-col gap-2">
               {events.map((ev) => (
-                <Link
+                <div
                   key={ev.id}
-                  href={`/events/${ev.id}`}
                   className="bg-white border border-neutral-200 rounded-lg px-4 py-3 flex items-center justify-between hover:border-neutral-400 transition-colors"
                 >
-                  <div>
-                    <div className="text-sm font-medium text-neutral-800">{ev.name}</div>
-                    <div className="text-xs text-neutral-500">
-                      {ev.client.name} · {ev.roomTemplate.venueName} — {ev.roomTemplate.roomName} ·{" "}
-                      {new Date(ev.eventDate).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}
+                  <Link href={`/events/${ev.id}`} className="flex items-center justify-between flex-1 min-w-0">
+                    <div>
+                      <div className="text-sm font-medium text-neutral-800">{ev.name}</div>
+                      <div className="text-xs text-neutral-500">
+                        {ev.client.name} · {ev.roomTemplate.venueName} — {ev.roomTemplate.roomName} ·{" "}
+                        {new Date(ev.eventDate).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}
+                      </div>
                     </div>
-                  </div>
-                  <div className="text-xs text-neutral-500">
-                    {ev.layouts.length} layout{ev.layouts.length === 1 ? "" : "s"}
-                    {ev.guestCountTarget ? ` · target ${ev.guestCountTarget}` : ""}
-                  </div>
-                </Link>
+                    <div className="text-xs text-neutral-500 mr-4">
+                      {ev.layouts.length} layout{ev.layouts.length === 1 ? "" : "s"}
+                      {ev.guestCountTarget ? ` · target ${ev.guestCountTarget}` : ""}
+                    </div>
+                  </Link>
+                  {canDelete && (
+                    <button
+                      onClick={() => handleDelete(ev)}
+                      disabled={deletingId === ev.id}
+                      className="text-xs px-2.5 py-1 rounded-md border border-red-200 text-red-700 hover:border-red-400 hover:bg-red-50 transition-colors disabled:opacity-50 shrink-0"
+                    >
+                      {deletingId === ev.id ? "Deleting…" : "Delete"}
+                    </button>
+                  )}
+                </div>
               ))}
             </div>
           )}

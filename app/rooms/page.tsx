@@ -27,6 +27,7 @@ export default function RoomsPage() {
   const [lengthFt, setLengthFt] = useState("");
   const [ceilingHeightFt, setCeilingHeightFt] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/rooms");
@@ -72,6 +73,25 @@ export default function RoomsPage() {
       setError(err instanceof Error ? err.message : "Couldn't create room");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+    async function handleDelete(room: RoomRow) {
+    if (!window.confirm(`Delete "${room.venueName} — ${room.roomName}"? This can't be undone.`)) return;
+    setDeletingId(room.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/rooms/${room.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Delete failed (${res.status})`);
+      }
+      await load();
+    } catch (err) {
+      console.error(err);
+      setError(err instanceof Error ? err.message : "Couldn't delete room");
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -190,6 +210,15 @@ export default function RoomsPage() {
                       {r.ceilingHeightFt ? ` · ${r.ceilingHeightFt}' ceiling` : ""}
                     </div>
                   </div>
+                  {canManage && (
+                    <button
+                      onClick={() => handleDelete(r)}
+                      disabled={deletingId === r.id}
+                      className="text-xs px-2.5 py-1 rounded-md border border-red-200 text-red-700 hover:border-red-400 hover:bg-red-50 transition-colors disabled:opacity-50 shrink-0"
+                    >
+                      {deletingId === r.id ? "Deleting…" : "Delete"}
+                    </button>
+                  )}
                 </div>
               ))}
             </div>

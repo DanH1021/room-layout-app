@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { TopNav } from "@/components/dashboard/TopNav";
+import { useCurrentUser } from "@/lib/auth/useCurrentUser";
 
 interface LayoutRow {
   id: string;
@@ -25,11 +26,16 @@ interface EventDetail {
 export default function EventDetailPage() {
   const params = useParams<{ eventId: string }>();
   const router = useRouter();
+  const user = useCurrentUser();
+  const canDelete = user ? user.role !== "read_only" : false;
   const [event, setEvent] = useState<EventDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [newLayoutName, setNewLayoutName] = useState("");
   const [copyFrom, setCopyFrom] = useState("");
   const [creating, setCreating] = useState(false);
+  const [deletingEvent, setDeletingEvent] = useState(false);
+  const [deletingLayoutId, setDeletingLayoutId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/events/${params.eventId}`);
@@ -67,6 +73,44 @@ export default function EventDetailPage() {
     } finally {
       setCreating(false);
     }
+
+  async function handleDeleteEvent() {
+    if (!event) return;
+    if (!window.confirm(`Delete "${event.name}"? This can't be undone.`)) return;
+    setDeletingEvent(true);
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/events/${params.eventId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Delete failed (${res.status})`);
+      }
+      router.push("/events");
+    } catch (err) {
+      console.error(err);
+      setActionError(err instanceof Error ? err.message : "Couldn't delete event");
+      setDeletingEvent(false);
+    }
+  }
+
+  async function handleDeleteLayout(layout: LayoutRow) {
+    if (!window.confirm(`Delete layout "${layout.name}"? This can't be undone.`)) return;
+    setDeletingLayoutId(layout.id);
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/layouts/${layout.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `Delete failed (${res.status})`);
+      }
+      await load();
+    } catch (err) {
+      console.error(err);
+      setActionError(err instanceof Error ? err.message : "Couldn't delete layout");
+    } finally {
+      setDeletingLayoutId(null);
+    }
+  }
   }
 
   if (error) {
@@ -92,9 +136,20 @@ export default function EventDetailPage() {
       <TopNav />
       <div className="max-w-3xl mx-auto p-6 flex flex-col gap-6">
         <div>
-          <Link href="/events" className="text-xs text-neutral-500 hover:text-neutral-800">
-            &larr; All events
-          </Link>
+          <div className="flex items-start justify-between">
+            <Link href="/events" className="text-xs text-neutral-500 hover:text-neutral-800">
+              &larr; All events
+            </Link>
+            {canDelete && (
+              <button
+                onClick={handleDeleteEvent}
+                disabled={deletingEvent}
+                className="text-xs px-2.5 py-1 rounded-md border border-red-200 text-red-700 hover:border-red-400 hover:bg-red-50 transition-colors disabled:opacity-50"
+              >
+                {deletingEvent ? "Deleting…" : "Delete Event"}
+              </button>
+            )}
+          </div>
           <h1 className="text-xl font-semibold text-neutral-800 mt-1">{event.name}</h1>
           <p className="text-sm text-neutral-600 mt-1">
             {event.client.name} · {event.roomTemplate.venueName} — {event.roomTemplate.roomName} (
@@ -102,6 +157,7 @@ export default function EventDetailPage() {
             {new Date(event.eventDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}
             {event.guestCountTarget ? ` · guest target ${event.guestCountTarget}` : ""}
           </p>
+          {actionError && <p className="text-sm text-red-600 mt-2">{actionError}</p>}
         </div>
 
         <div>
@@ -150,19 +206,29 @@ export default function EventDetailPage() {
           ) : (
             <div className="flex flex-col gap-2">
               {event.layouts.map((l) => (
-                <Link
+                <div
                   key={l.id}
-                  href={`/editor/${l.id}`}
                   className="bg-white border border-neutral-200 rounded-lg px-4 py-3 flex items-center justify-between hover:border-neutral-400 transition-colors"
                 >
-                  <span className="text-sm font-medium text-neutral-800">{l.name}</span>
-                  <span className="text-xs text-neutral-500 flex items-center gap-3">
-                    <span className="capitalize px-2 py-0.5 rounded-full bg-neutral-100 border border-neutral-200">
-                      {l.status.replace("_", " ")}
+                  <Link href={`/editor/${l.id}`} className="flex items-center justify-between flex-1 min-w-0 mr-4">
+                    <span className="text-sm font-medium text-neutral-800">{l.name}</span>
+                    <span className="text-xs text-neutral-500 flex items-center gap-3 mr-4">
+                      <span className="capitalize px-2 py-0.5 rounded-full bg-neutral-100 border border-neutral-200">
+                        {l.status.replace("_", " ")}
+                      </span>
+                      Updated {new Date(l.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                     </span>
-                    Updated {new Date(l.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                  </span>
-                </Link>
+                  </Link>
+                  {canDelete && (
+                    <button
+                      onClick={() => handleDeleteLayout(l)}
+                      disabled={deletingLayoutId === l.id}
+                      className="text-xs px-2.5 py-1 rounded-md border border-red-200 text-red-700 hover:border-red-400 hover:bg-red-50 transition-colors disabled:opacity-50 shrink-0"
+                    >
+                      {deletingLayoutId === l.id ? "Deleting…" : "Delete"}
+                    </button>
+                  )}
+                </div>
               ))}
             </div>
           )}

@@ -73,6 +73,7 @@ export default function EventDetailPage() {
     } finally {
       setCreating(false);
     }
+  }
 
   async function handleDeleteEvent() {
     if (!event) return;
@@ -110,7 +111,6 @@ export default function EventDetailPage() {
     } finally {
       setDeletingLayoutId(null);
     }
-  }
   }
 
   if (error) {

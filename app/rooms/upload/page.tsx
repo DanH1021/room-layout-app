@@ -386,6 +386,32 @@ export default function UploadFloorPlanPage() {
 
   const selectedObstacle = obstacles.find((o) => o.localId === selectedObstacleId) ?? null;
 
+  // The review step's own instructions promise a delete-key shortcut for
+  // the selected corner ("select a corner and press the delete key"), but
+  // nothing ever wired one up — Backspace/Delete did nothing, so the small
+  // button below the canvas was the only way to remove anything. Same gap
+  // existed for obstacles. Skip it while focus is in a text/number input
+  // (editing an obstacle's width, a name field, etc.) so Backspace there
+  // still just edits text instead of deleting the selected shape.
+  useEffect(() => {
+    if (step !== "review") return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) return;
+      if (selectedVertexIdx !== null && boundaryPx.length > 3) {
+        e.preventDefault();
+        deleteVertex(selectedVertexIdx);
+      } else if (selectedObstacleId !== null) {
+        e.preventDefault();
+        deleteObstacle(selectedObstacleId);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [step, selectedVertexIdx, selectedObstacleId, boundaryPx.length]);
+
   // --- Commit ---
 
   async function handleCommit() {
@@ -656,10 +682,16 @@ export default function UploadFloorPlanPage() {
                         {upload.pxPerInch.toFixed(4)} px/inch
                       </span>
                       {notes && <span>AI notes: {notes}</span>}
+                      <span className="text-neutral-600">
+                        Treat this trace as a first draft, not a finished room — the AI sometimes adds obstacles
+                        (doors especially) that aren&apos;t really there, or misses the exact wall line. Check it
+                        against the plan before confirming.
+                      </span>
                       <span>
                         Drag the boundary&apos;s corner handles to fix the room outline. Double-click an edge to
-                        add a corner there; select a corner and press the delete key (or the button below the
-                        canvas) to remove it. Click an obstacle to edit it in the side panel.
+                        add a corner there; select a corner or obstacle and press Delete/Backspace (or the button
+                        below the canvas) to remove it. Click an obstacle to edit it in the side panel, or use
+                        &quot;Clear all obstacles&quot; below to start obstacles over from scratch.
                       </span>
                     </div>
                   </div>
@@ -771,6 +803,19 @@ export default function UploadFloorPlanPage() {
                     >
                       + Add obstacle
                     </button>
+                    {obstacles.length > 0 && (
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Remove all ${obstacles.length} AI-detected obstacles? You can still add them back manually.`)) {
+                            setObstacles([]);
+                            setSelectedObstacleId(null);
+                          }
+                        }}
+                        className="text-xs px-3 py-1.5 rounded-md border border-neutral-300 text-neutral-600 hover:border-red-400 hover:text-red-700 transition-colors"
+                      >
+                        Clear all obstacles
+                      </button>
+                    )}
                   </div>
 
                   {error && <p className="text-sm text-red-600">{error}</p>}

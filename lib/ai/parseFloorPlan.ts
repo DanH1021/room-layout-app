@@ -165,6 +165,22 @@ export async function parseFloorPlan(
     throw new Error("Claude did not return a structured tool-use response.");
   }
 
+  // Claude's raw tool-use JSON Schema can't express zod's .positive()
+  // constraint, so when it isn't confident about the scale it sometimes
+  // emits drawnInchesPerRealFoot: 0 as an "unknown" sentinel instead of
+  // omitting the field. A non-positive value is never a real multiplier —
+  // strip it here (and make sure confidence reflects that it's unresolved)
+  // rather than letting the whole upload fail on a schema mismatch for a
+  // field the review step lets the human calibrate manually anyway.
+  const input = toolUse.input as Record<string, unknown>;
+  const scaleNote = input?.scaleNote as Record<string, unknown> | undefined;
+  if (scaleNote && typeof scaleNote.drawnInchesPerRealFoot === "number" && scaleNote.drawnInchesPerRealFoot <= 0) {
+    delete scaleNote.drawnInchesPerRealFoot;
+    if (scaleNote.confidence !== "none") {
+      scaleNote.confidence = "low";
+    }
+  }
+
   // Never trust AI output for spatial facts, or at all — validate against
   // the zod schema exactly like server-side input from a client would be.
   const parsed = proposedFloorPlanSchema.safeParse(toolUse.input);

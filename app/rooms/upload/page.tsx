@@ -558,9 +558,20 @@ export default function UploadFloorPlanPage() {
                               key={i}
                               x={p.x * viewScale}
                               y={p.y * viewScale}
-                              radius={6}
+                              radius={7}
                               fill="#2563eb"
+                              stroke="#ffffff"
+                              strokeWidth={1.5}
+                              hitStrokeWidth={24}
                               draggable
+                              onMouseEnter={(e) => {
+                                const container = e.target.getStage()?.container();
+                                if (container) container.style.cursor = "grab";
+                              }}
+                              onMouseLeave={(e) => {
+                                const container = e.target.getStage()?.container();
+                                if (container) container.style.cursor = "default";
+                              }}
                               onDragMove={(e) => {
                                 const node = e.target;
                                 const updated = { x: node.x() / viewScale, y: node.y() / viewScale };
@@ -680,8 +691,16 @@ export default function UploadFloorPlanPage() {
                             <Circle
                               x={p.x * viewScale}
                               y={p.y * viewScale}
-                              radius={5}
+                              radius={8}
                               fill={selectedVertexIdx === i ? "#dc2626" : "#16a34a"}
+                              stroke="#ffffff"
+                              strokeWidth={1.5}
+                              // The visible dot is small on purpose (so it doesn't obscure the
+                              // drawing), but that made it hard to actually grab — a few missed
+                              // clicks in a row read as "it won't let me place the corner." This
+                              // invisible hit radius is much bigger than the dot itself, so the
+                              // drag reliably starts even if the click is a little off-target.
+                              hitStrokeWidth={24}
                               draggable
                               onClick={(e) => {
                                 e.cancelBubble = true;
@@ -691,6 +710,10 @@ export default function UploadFloorPlanPage() {
                               onDblClick={(e) => {
                                 e.cancelBubble = true;
                                 insertVertexOnEdge(i);
+                              }}
+                              onDragStart={(e) => {
+                                const container = e.target.getStage()?.container();
+                                if (container) container.style.cursor = "grabbing";
                               }}
                               onDragMove={(e) => {
                                 const node = e.target;
@@ -703,6 +726,16 @@ export default function UploadFloorPlanPage() {
                                   const withDrop = prev.map((pt, idx) => (idx === i ? dropped : pt));
                                   return snapVertexToNeighbors(withDrop, i);
                                 });
+                                const container = e.target.getStage()?.container();
+                                if (container) container.style.cursor = "grab";
+                              }}
+                              onMouseEnter={(e) => {
+                                const container = e.target.getStage()?.container();
+                                if (container) container.style.cursor = "grab";
+                              }}
+                              onMouseLeave={(e) => {
+                                const container = e.target.getStage()?.container();
+                                if (container) container.style.cursor = "default";
                               }}
                             />
                           </Group>

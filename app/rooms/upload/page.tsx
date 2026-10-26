@@ -142,6 +142,11 @@ export default function UploadFloorPlanPage() {
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadId, setUploadId] = useState<string | null>(null);
+  // True when the user chose "skip AI, trace manually" at upload time —
+  // runParse is never called, so there's no AI boundary/obstacle guess to
+  // review or distrust; the room is built from the exact uploaded image
+  // plus a human-entered scale, full stop.
+  const [skippedAi, setSkippedAi] = useState(false);
 
   // --- Shared upload row, refreshed after parse/calibrate ---
   const [upload, setUpload] = useState<UploadRow | null>(null);
@@ -192,10 +197,11 @@ export default function UploadFloorPlanPage() {
     }
   }, []);
 
-  async function handleUpload() {
+  async function handleUpload(skipAi: boolean) {
     if (!file) return;
     setError(null);
     setUploading(true);
+    setSkippedAi(skipAi);
     try {
       const formData = new FormData();
       formData.append("file", file);
@@ -206,7 +212,34 @@ export default function UploadFloorPlanPage() {
       }
       const data = await res.json();
       setUploadId(data.uploadId);
-      await runParse(data.uploadId);
+      if (skipAi) {
+        // No AI parse call at all — build the UploadRow straight from the
+        // upload response (which already has everything calibration needs:
+        // the image URL and its pixel dimensions) and go directly to manual
+        // calibration. Saves the API call/cost and, more importantly,
+        // avoids ever generating a boundary/obstacle guess the user didn't
+        // ask for and would otherwise have to notice and distrust.
+        const manualUpload: UploadRow = {
+          id: data.uploadId,
+          orgId: "",
+          originalFileType: data.fileType,
+          backgroundImageUrl: data.backgroundImageUrl,
+          backgroundImageWidthPx: data.widthPx,
+          backgroundImageHeightPx: data.heightPx,
+          aiScaleConfidence: null,
+          aiRawResponseJson: null,
+          proposedBoundaryJson: null,
+          proposedObstaclesJson: null,
+          pxPerInch: null,
+          status: "uploaded",
+          errorMessage: null,
+        };
+        setUpload(manualUpload);
+        setManualMode(true);
+        setStep("calibrate");
+      } else {
+        await runParse(data.uploadId);
+      }
     } catch (err) {
       console.error(err);
       setError(err instanceof Error ? err.message : "Something went wrong.");
@@ -306,7 +339,21 @@ export default function UploadFloorPlanPage() {
     const w = u.backgroundImageWidthPx ?? 0;
     const h = u.backgroundImageHeightPx ?? 0;
     const boundaryNorm = u.proposedBoundaryJson ?? [];
-    setBoundaryPx(boundaryNorm.map((p) => normToPx(p, w, h)));
+    if (boundaryNorm.length > 0) {
+      setBoundaryPx(boundaryNorm.map((p) => normToPx(p, w, h)));
+    } else {
+      // No AI trace (skipped, or parsing simply found nothing usable) —
+      // default to the full image as the boundary rather than leaving an
+      // empty polygon with no edges to drag or double-click. It's a rough
+      // "don't place equipment off the visible plan" guard, not a real wall
+      // trace; drag the corners in if the image has margin around the room.
+      setBoundaryPx([
+        { x: 0, y: 0 },
+        { x: w, y: 0 },
+        { x: w, y: h },
+        { x: 0, y: h },
+      ]);
+    }
 
     const proposed = u.proposedObstaclesJson ?? [];
     setObstacles(
@@ -476,8 +523,8 @@ export default function UploadFloorPlanPage() {
         <div>
           <h1 className="text-lg font-semibold text-neutral-800 mb-1">Upload a Floor Plan</h1>
           <p className="text-xs text-neutral-500">
-            Upload a PDF or image of a venue floor plan, confirm its scale, then review and correct the
-            AI&apos;s traced boundary and obstacles before creating a real room.
+            Upload a PDF or image of a venue floor plan and confirm its scale, then either review an
+            AI-traced boundary or place equipment directly over the exact uploaded image yourself.
           </p>
         </div>
 
@@ -501,13 +548,28 @@ export default function UploadFloorPlanPage() {
                   className="text-sm"
                 />
                 {error && <p className="text-sm text-red-600">{error}</p>}
-                <button
-                  onClick={handleUpload}
-                  disabled={!file || uploading}
-                  className="self-start text-sm px-4 py-2 rounded-md bg-neutral-900 text-white disabled:opacity-50 hover:bg-neutral-700 transition-colors"
-                >
-                  {uploading ? "Uploading…" : "Upload & Parse"}
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => handleUpload(false)}
+                    disabled={!file || uploading}
+                    className="self-start text-sm px-4 py-2 rounded-md bg-neutral-900 text-white disabled:opacity-50 hover:bg-neutral-700 transition-colors"
+                  >
+                    {uploading ? "Uploading…" : "Upload & Parse (AI-assisted trace)"}
+                  </button>
+                  <button
+                    onClick={() => handleUpload(true)}
+                    disabled={!file || uploading}
+                    className="self-start text-sm px-4 py-2 rounded-md border border-neutral-300 disabled:opacity-50 hover:border-neutral-500 transition-colors"
+                  >
+                    {uploading ? "Uploading…" : "Upload & trace manually"}
+                  </button>
+                </div>
+                <p className="text-xs text-neutral-500">
+                  AI-assisted gives you a starting boundary and obstacle guess to correct. &quot;Trace
+                  manually&quot; skips that — you calibrate the scale yourself (e.g. click two ends of
+                  something you know the real length of, like a bar or a wall) and place equipment directly
+                  over the exact uploaded image, with no AI guesswork about walls, doors, or windows.
+                </p>
               </div>
             )}
 
@@ -524,7 +586,7 @@ export default function UploadFloorPlanPage() {
             {step === "calibrate" && upload && (
               <div className="bg-white border border-neutral-200 rounded-lg p-4 flex flex-col gap-4 max-w-3xl">
                 {error && <p className="text-sm text-red-600">{error}</p>}
-                {!upload.proposedBoundaryJson && (
+                {!skippedAi && !upload.proposedBoundaryJson && (
                   <div className="flex flex-col gap-2 items-start">
                     <p className="text-sm text-red-600">Parsing failed or hasn&apos;t completed.</p>
                     <button
@@ -536,7 +598,7 @@ export default function UploadFloorPlanPage() {
                   </div>
                 )}
 
-                {upload.proposedBoundaryJson && !effectiveManualMode && canUseScaleNote && (
+                {!skippedAi && upload.proposedBoundaryJson && !effectiveManualMode && canUseScaleNote && (
                   <div className="flex flex-col gap-3">
                     <p className="text-sm text-neutral-700">
                       Detected scale note (confidence: <strong>{upload.aiScaleConfidence}</strong>):
@@ -562,7 +624,7 @@ export default function UploadFloorPlanPage() {
                   </div>
                 )}
 
-                {upload.proposedBoundaryJson && effectiveManualMode && (
+                {(skippedAi || upload.proposedBoundaryJson) && effectiveManualMode && (
                   <div className="flex flex-col gap-3">
                     <p className="text-sm text-neutral-700">
                       Click two points on the drawing that you know the real-world distance between (e.g.
@@ -678,15 +740,26 @@ export default function UploadFloorPlanPage() {
                     </div>
                     <div className="text-xs text-neutral-500 flex flex-col gap-1">
                       <span>
-                        AI scale confidence: <strong>{upload.aiScaleConfidence ?? "n/a"}</strong> · Calibrated at{" "}
-                        {upload.pxPerInch.toFixed(4)} px/inch
+                        {skippedAi ? "Manually traced — no AI involved" : (
+                          <>AI scale confidence: <strong>{upload.aiScaleConfidence ?? "n/a"}</strong></>
+                        )} · Calibrated at {upload.pxPerInch.toFixed(4)} px/inch
                       </span>
                       {notes && <span>AI notes: {notes}</span>}
-                      <span className="text-neutral-600">
-                        Treat this trace as a first draft, not a finished room — the AI sometimes adds obstacles
-                        (doors especially) that aren&apos;t really there, or misses the exact wall line. Check it
-                        against the plan before confirming.
-                      </span>
+                      {skippedAi ? (
+                        <span className="text-neutral-600">
+                          The floor plan image itself is the room — its walls, doors, and fixtures are whatever
+                          is actually drawn, not a traced guess. The rough boundary below is just a &quot;stay on
+                          the visible plan&quot; guide; drag its corners in if you want it tighter. Place
+                          equipment by eye against the real image, and use the Measure tool in the editor to
+                          double-check any distance precisely.
+                        </span>
+                      ) : (
+                        <span className="text-neutral-600">
+                          Treat this trace as a first draft, not a finished room — the AI sometimes adds obstacles
+                          (doors especially) that aren&apos;t really there, or misses the exact wall line. Check it
+                          against the plan before confirming.
+                        </span>
+                      )}
                       <span>
                         Drag the boundary&apos;s corner handles to fix the room outline. Double-click an edge to
                         add a corner there; select a corner or obstacle and press Delete/Backspace (or the button

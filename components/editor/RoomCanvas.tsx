@@ -5,7 +5,7 @@ import { Stage, Layer, Rect, Circle, Text, Group, Transformer, Line, Shape, Imag
 import Konva from "konva";
 import { EquipmentItem, LayoutObject, RoomFeatureRecord, RoomTemplate, roomFeatureToObstacle } from "@/lib/geometry/types";
 import { instantiateEquipment } from "@/lib/geometry/placement";
-import { inchesToPx, pxToInches, feetToInches } from "@/lib/geometry/scale";
+import { inchesToPx, pxToInches, feetToInches, inchesToFeetLabel } from "@/lib/geometry/scale";
 import { polygonBoundingBox } from "@/lib/geometry/room";
 import { Toolbar } from "@/components/editor/Toolbar";
 import { IssuePanel } from "@/components/editor/IssuePanel";
@@ -75,6 +75,22 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   const [bgOpacity, setBgOpacity] = useState(0.6);
   const [showBackground, setShowBackground] = useState(true);
   const [cropToRoom, setCropToRoom] = useState(true);
+  // Measure tool: click two points (room inches, not screen px, so it stays
+  // correct under pan/zoom) to see the real-world distance between them —
+  // e.g. checking the actual gap between two tables' chairs against the
+  // real floor plan, without the app needing to understand either shape.
+  const [measureMode, setMeasureMode] = useState(false);
+  const [measureStart, setMeasureStart] = useState<{ x: number; y: number } | null>(null);
+  const [measureLive, setMeasureLive] = useState<{ x: number; y: number } | null>(null);
+  // The last *finished* measurement (persists on screen after the click that
+  // completed it, even once measureStart has already moved on to begin the
+  // next chained measurement) — without this, the line/label you just made
+  // would vanish the instant you click again to start the next one.
+  const [measureCompleted, setMeasureCompleted] = useState<{
+    start: { x: number; y: number };
+    end: { x: number; y: number };
+    distanceIn: number;
+  } | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const groupRefs = useRef<Record<string, Konva.Group>>({});
@@ -190,12 +206,43 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
       } else if (e.key === "Escape" && armedEquipmentId) {
         e.preventDefault();
         setArmedEquipmentId(null);
+      } else if (e.key === "Escape" && measureMode) {
+        e.preventDefault();
+        if (measureStart) {
+          setMeasureStart(null);
+          setMeasureLive(null);
+        } else {
+          setMeasureMode(false);
+        }
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedIds, objects, saveLayout, armedEquipmentId, readOnly]);
+  }, [selectedIds, objects, saveLayout, armedEquipmentId, readOnly, measureMode, measureStart]);
+
+  function toggleMeasureMode() {
+    setMeasureMode((prev) => {
+      const next = !prev;
+      if (next) setArmedEquipmentId(null); // mutually exclusive with placing equipment
+      setMeasureStart(null);
+      setMeasureLive(null);
+      setMeasureCompleted(null);
+      return next;
+    });
+  }
+
+  /** Stage pointer -> room inches, same math the "place equipment" click handler uses. */
+  function pointerToRoomInches(stage: Konva.Stage): { x: number; y: number } | null {
+    const pointer = stage.getPointerPosition();
+    if (!pointer) return null;
+    const localPx = pointer.x - stage.x() - stageOffset.x;
+    const localPy = pointer.y - stage.y() - stageOffset.y;
+    return {
+      x: boundingBox.minX + pxToInches(localPx, zoom),
+      y: boundingBox.minY + pxToInches(localPy, zoom),
+    };
+  }
 
   const parents = useMemo(() => objects.filter((o) => !o.parentObjectId), [objects]);
   const childrenByParent = useMemo(() => {
@@ -375,6 +422,13 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
         onBgOpacityChange={setBgOpacity}
         cropToRoom={cropToRoom}
         onToggleCropToRoom={() => setCropToRoom((v) => !v)}
+        measureMode={measureMode}
+        onToggleMeasure={toggleMeasureMode}
+        measureResultLabel={
+          measureCompleted
+            ? `${inchesToFeetLabel(measureCompleted.distanceIn)} (${Math.round(measureCompleted.distanceIn)}")`
+            : null
+        }
       />
       <div ref={containerRef} className="flex-1 h-full bg-neutral-100 overflow-hidden relative">
         <div className="absolute top-2 left-2 z-10 bg-white/90 backdrop-blur px-3 py-1.5 rounded-md text-xs text-neutral-700 shadow-sm flex items-center gap-3">
@@ -422,15 +476,37 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
             Click to place: {getEquipmentItem(armedEquipmentId).name} — press Esc to cancel
           </div>
         )}
+        {measureMode && (
+          <div className="absolute top-12 left-1/2 -translate-x-1/2 z-10 bg-blue-600 text-white text-xs px-3 py-1.5 rounded-full shadow-sm">
+            {measureStart ? "Click the second point — press Esc to cancel" : "Click a starting point — press Esc to stop measuring"}
+          </div>
+        )}
         <Stage
           width={containerSize.width}
           height={containerSize.height}
-          draggable
-          style={armedEquipmentId ? { cursor: "crosshair" } : undefined}
+          draggable={!measureMode}
+          style={armedEquipmentId ? { cursor: "crosshair" } : measureMode ? { cursor: "crosshair" } : undefined}
           onClick={(e) => {
             if (e.target !== e.target.getStage()) return;
+            const stage = e.target.getStage();
+            if (measureMode && stage) {
+              const pt = pointerToRoomInches(stage);
+              if (!pt) return;
+              if (!measureStart) {
+                setMeasureStart(pt);
+                setMeasureLive(pt);
+              } else {
+                const dist = Math.hypot(pt.x - measureStart.x, pt.y - measureStart.y);
+                setMeasureCompleted({ start: measureStart, end: pt, distanceIn: dist });
+                // Chain into the next measurement from this same point, so
+                // checking several gaps in a row doesn't need re-toggling
+                // the tool each time.
+                setMeasureStart(pt);
+                setMeasureLive(pt);
+              }
+              return;
+            }
             if (armedEquipmentId) {
-              const stage = e.target.getStage();
               const pointer = stage?.getPointerPosition();
               if (!stage || !pointer) return;
               // Stage itself is draggable (pan), so its own x/y offset must be
@@ -445,6 +521,13 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
             } else {
               setSelectedIds(new Set());
             }
+          }}
+          onMouseMove={(e) => {
+            if (!measureMode || !measureStart) return;
+            const stage = e.target.getStage();
+            if (!stage) return;
+            const pt = pointerToRoomInches(stage);
+            if (pt) setMeasureLive(pt);
           }}
         >
           {showBackground && room.backgroundImageUrl && bgImage && (
@@ -608,6 +691,33 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
               rotateAnchorOffset={24}
             />
           </Layer>
+
+          {measureMode && (
+            <Layer x={stageOffset.x} y={stageOffset.y} listening={false}>
+              {measureCompleted && (
+                <MeasureSegment
+                  start={measureCompleted.start}
+                  end={measureCompleted.end}
+                  distanceIn={measureCompleted.distanceIn}
+                  boundingBox={boundingBox}
+                  zoom={zoom}
+                  dashed={false}
+                />
+              )}
+              {measureStart &&
+                measureLive &&
+                (measureStart.x !== measureLive.x || measureStart.y !== measureLive.y) && (
+                  <MeasureSegment
+                    start={measureStart}
+                    end={measureLive}
+                    distanceIn={Math.hypot(measureLive.x - measureStart.x, measureLive.y - measureStart.y)}
+                    boundingBox={boundingBox}
+                    zoom={zoom}
+                    dashed
+                  />
+                )}
+            </Layer>
+          )}
         </Stage>
       </div>
     </div>
@@ -678,6 +788,61 @@ function ShapeVisual({
 // Fixed architectural obstacles (columns, permanent bars, stairs, etc.)
 // traced from an uploaded floor plan. Rendered non-interactively, styled
 // distinctly from movable equipment (slate gray vs. the equipment palette).
+function MeasureSegment({
+  start,
+  end,
+  distanceIn,
+  boundingBox,
+  zoom,
+  dashed,
+}: {
+  start: { x: number; y: number };
+  end: { x: number; y: number };
+  distanceIn: number;
+  boundingBox: { minX: number; minY: number };
+  zoom: number;
+  dashed: boolean;
+}) {
+  const x1 = inchesToPx(start.x - boundingBox.minX, zoom);
+  const y1 = inchesToPx(start.y - boundingBox.minY, zoom);
+  const x2 = inchesToPx(end.x - boundingBox.minX, zoom);
+  const y2 = inchesToPx(end.y - boundingBox.minY, zoom);
+  const midX = (x1 + x2) / 2;
+  const midY = (y1 + y2) / 2;
+  const label = `${inchesToFeetLabel(distanceIn)} (${Math.round(distanceIn)}")`;
+  const color = dashed ? "#2563eb" : "#dc2626";
+
+  return (
+    <Group>
+      <Line points={[x1, y1, x2, y2]} stroke={color} strokeWidth={2} dash={dashed ? [6, 4] : undefined} />
+      <Circle x={x1} y={y1} radius={4} fill={color} />
+      <Circle x={x2} y={y2} radius={4} fill={color} />
+      <Group x={midX} y={midY}>
+        <Rect
+          x={-label.length * 3.4}
+          y={-18}
+          width={label.length * 6.8}
+          height={18}
+          fill="#ffffff"
+          stroke={color}
+          strokeWidth={1}
+          cornerRadius={3}
+        />
+        <Text
+          x={-label.length * 3.4}
+          y={-15}
+          width={label.length * 6.8}
+          align="center"
+          text={label}
+          fontSize={12}
+          fontStyle="bold"
+          fill={color}
+        />
+      </Group>
+    </Group>
+  );
+}
+
 function ObstacleVisual({
   feature,
   zoom,

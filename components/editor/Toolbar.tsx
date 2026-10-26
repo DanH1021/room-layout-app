@@ -26,6 +26,9 @@ interface ToolbarProps {
   onBgOpacityChange?: (opacity: number) => void;
   cropToRoom?: boolean;
   onToggleCropToRoom?: () => void;
+  measureMode: boolean;
+  onToggleMeasure: () => void;
+  measureResultLabel?: string | null;
 }
 
 export function Toolbar({
@@ -52,6 +55,9 @@ export function Toolbar({
   onBgOpacityChange,
   cropToRoom,
   onToggleCropToRoom,
+  measureMode,
+  onToggleMeasure,
+  measureResultLabel,
 }: ToolbarProps) {
   return (
     <div className="flex flex-col gap-4 w-64 shrink-0 border-r border-neutral-200 bg-neutral-50 p-4 h-full overflow-y-auto">
@@ -163,6 +169,27 @@ export function Toolbar({
           <input type="checkbox" checked={snapEnabled} onChange={onToggleSnap} />
           Snap to grid
         </label>
+      </div>
+
+      <div className="border-t border-neutral-200 pt-4">
+        <h2 className="text-sm font-semibold text-neutral-700 mb-2">Measure</h2>
+        <button
+          onClick={onToggleMeasure}
+          className={`w-full text-sm px-3 py-2 rounded-md border transition-colors ${
+            measureMode
+              ? "bg-blue-50 border-blue-500 ring-1 ring-blue-500 text-blue-900"
+              : "bg-white border-neutral-300 hover:border-neutral-500 hover:bg-neutral-100"
+          }`}
+        >
+          {measureMode ? "Measuring… click to finish (Esc to cancel)" : "Measure distance"}
+        </button>
+        <p className="text-xs text-neutral-500 mt-1.5">
+          Click two points on the canvas — table edges, chair backs, a wall in the floor plan — to see the
+          real-world distance between them.
+        </p>
+        {measureResultLabel && (
+          <p className="text-sm font-semibold text-blue-700 mt-2">Last measurement: {measureResultLabel}</p>
+        )}
       </div>
 
       {hasBackgroundImage && (

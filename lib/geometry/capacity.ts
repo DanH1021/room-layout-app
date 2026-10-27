@@ -10,7 +10,16 @@ export function computeCapacity(
   getEquipment: (id: string) => EquipmentItem
 ): number {
   return objects.reduce((total, obj) => {
-    const item = getEquipment(obj.equipmentItemId);
+    // Ad-hoc objects (text labels) have no equipmentItemId and no library
+    // entry — they're never seating, so just skip them rather than letting
+    // the lookup throw.
+    if (!obj.equipmentItemId) return total;
+    let item: EquipmentItem;
+    try {
+      item = getEquipment(obj.equipmentItemId);
+    } catch {
+      return total;
+    }
     return item.category === "chair" ? total + 1 : total;
   }, 0);
 }

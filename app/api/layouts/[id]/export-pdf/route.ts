@@ -41,24 +41,30 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     color: e.color,
   }));
 
-  const objects: LayoutObject[] = layout.objects.map((o) => ({
-    id: o.id,
-    // Ad-hoc/custom objects (no equipmentItemId) aren't supported by the MVP
-    // UI yet; coercing to "" here just makes drawEquipment's lookup miss and
-    // silently skip them, same as everywhere else in the app that assumes a
-    // real equipment item exists.
-    equipmentItemId: o.equipmentItemId ?? "",
-    parentObjectId: o.parentObjectId,
-    shape: o.shape as LayoutObject["shape"],
-    x: o.x,
-    y: o.y,
-    rotation: o.rotation,
-    widthIn: o.widthIn ?? undefined,
-    lengthIn: o.lengthIn ?? undefined,
-    diameterIn: o.diameterIn ?? undefined,
-    zIndex: o.zIndex,
-    label: (o.metadata as { label?: string } | null)?.label ?? undefined,
-  }));
+  const objects: LayoutObject[] = layout.objects.map((o) => {
+    const metadata = o.metadata as { label?: string; linenType?: string; skirted?: boolean } | null;
+    return {
+      id: o.id,
+      // Ad-hoc objects (text labels) have no equipmentItemId — kept as null
+      // here (not coerced to "") so renderLayoutPdf can tell a real,
+      // unknown equipment item apart from an intentional text annotation
+      // and draw the latter from its own shape==="text" branch instead of
+      // silently skipping it.
+      equipmentItemId: o.equipmentItemId ?? null,
+      parentObjectId: o.parentObjectId,
+      shape: o.shape as LayoutObject["shape"],
+      x: o.x,
+      y: o.y,
+      rotation: o.rotation,
+      widthIn: o.widthIn ?? undefined,
+      lengthIn: o.lengthIn ?? undefined,
+      diameterIn: o.diameterIn ?? undefined,
+      zIndex: o.zIndex,
+      label: metadata?.label ?? undefined,
+      linenType: (metadata?.linenType as LayoutObject["linenType"]) ?? undefined,
+      skirted: metadata?.skirted ?? undefined,
+    };
+  });
 
   const boundary = room.boundaryJson as unknown as RoomBoundaryPoint[];
 
@@ -69,6 +75,10 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       widthFt: room.widthFt,
       lengthFt: room.lengthFt,
       boundary,
+      backgroundImageUrl: room.backgroundImageUrl ?? undefined,
+      backgroundImageWidthPx: room.backgroundImageWidthPx ?? undefined,
+      backgroundImageHeightPx: room.backgroundImageHeightPx ?? undefined,
+      backgroundImagePxPerInch: room.backgroundImagePxPerInch ?? undefined,
     },
     equipment,
     objects,
@@ -78,6 +88,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       ? new Date(layout.event.eventDate).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
       : undefined,
     guestCountTarget: layout.event.guestCountTarget ?? undefined,
+    setupNotes: layout.notes ?? undefined,
     generatedAtLabel: new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
   });
 

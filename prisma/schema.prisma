@@ -46,6 +46,17 @@ model EquipmentItem {
   lengthIn          Float?
   diameterIn        Float?
   defaultChairCount Int?
+  // How defaultChairCount's chairs wrap a circle table: null/"full" = all
+  // the way around (original behavior), "crescent" = half-moon, one side
+  // only. No effect on rect tables. See lib/geometry/placement.ts.
+  chairArrangement String?
+  // Hides this item from the "Add Equipment" picker without touching any
+  // layout that already placed one — unlike a real delete (which has
+  // nothing stopping it at the DB level, see the equipment DELETE route's
+  // own comment, but would break rendering for any already-placed
+  // instance), this just removes the *option to place new ones*. See
+  // RoomCanvas.tsx's pickableEquipment.
+  hidden            Boolean @default(false)
   clearanceIn       Float   @default(0) // required clearance around the object
   rotatable         Boolean @default(true)
   stackable         Boolean @default(true)

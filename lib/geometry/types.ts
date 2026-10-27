@@ -8,6 +8,15 @@ import { Shape } from "@/lib/geometry/collision";
 
 export type ShapeKind = "rect" | "circle";
 
+/**
+ * A free-standing text annotation placed directly on the canvas (table
+ * numbers, "Gift Table", etc.) — not tied to any EquipmentItem. Represented
+ * as a LayoutObject with shape "text", equipmentItemId null, and its text
+ * content stored in `label` (reusing the field tables already use for their
+ * printed name, rather than adding a parallel "textContent" field).
+ */
+export type ObjectShapeKind = ShapeKind | "text";
+
 export interface RoomBoundaryPoint {
   x: number; // inches
   y: number; // inches
@@ -82,6 +91,16 @@ export interface EquipmentItem {
   lengthIn?: number;
   diameterIn?: number;
   defaultChairCount?: number;
+  /**
+   * How defaultChairCount's chairs are arranged around a circle table.
+   * "full" (or unset) is the original all-the-way-around layout; "crescent"
+   * wraps them across half the circle only, leaving the other half open so
+   * every seated guest faces the same direction (banquet-style half rounds).
+   * Has no effect on rect tables.
+   */
+  chairArrangement?: "full" | "crescent";
+  /** Hides this item from the "Add Equipment" picker without affecting any layout that already placed one — see prisma/schema.prisma's EquipmentItem.hidden. */
+  hidden?: boolean;
   clearanceIn: number;
   rotatable: boolean;
   color: string; // fill color for MVP rendering
@@ -94,11 +113,14 @@ export interface Obstacle {
   blocksPlacement: boolean;
 }
 
+export type LinenType = "none" | "cloth" | "spandex";
+
 export interface LayoutObject {
   id: string;
-  equipmentItemId: string;
+  /** Null for ad-hoc objects with no equipment definition — currently just text labels. */
+  equipmentItemId?: string | null;
   parentObjectId?: string | null;
-  shape: ShapeKind;
+  shape: ObjectShapeKind;
   x: number; // inches, center-origin relative to room boundary origin
   y: number; // inches
   rotation: number; // degrees
@@ -106,5 +128,10 @@ export interface LayoutObject {
   lengthIn?: number;
   diameterIn?: number;
   zIndex: number;
+  /** Table/equipment name for the on-canvas label — OR, for shape "text", the annotation's actual text content. */
   label?: string;
+  /** Table linen color-coding: black = spandex, gray = cloth, item default = none. Tables only. */
+  linenType?: LinenType;
+  /** Draws a wavy skirting line around the table's edge when true. Tables only. */
+  skirted?: boolean;
 }

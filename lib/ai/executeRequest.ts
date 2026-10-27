@@ -126,9 +126,12 @@ export function executeStructuredRequest(
       let placedCount = 0;
       for (let i = 0; i < op.count; i++) {
         const occupied: FootprintCircle[] = objects
-          .filter((o) => !o.parentObjectId)
+          // Ad-hoc objects (text labels) have no equipmentItemId/library
+          // entry and take up no placement footprint — exclude them rather
+          // than letting the lookup below throw.
+          .filter((o) => !o.parentObjectId && o.equipmentItemId)
           .map((o) => {
-            const equip = getEquipment(o.equipmentItemId);
+            const equip = getEquipment(o.equipmentItemId!);
             return { cx: o.x, cy: o.y, radius: getFootprintRadius(equip, getEquipment) };
           });
         const spot = findOpenSpot(getFootprintRadius(item, getEquipment), roomWidthIn, roomLengthIn, occupied);

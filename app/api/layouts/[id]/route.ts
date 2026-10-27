@@ -32,7 +32,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const equipment = await prisma.equipmentItem.findMany({ where: { orgId: room.orgId } });
 
   return Response.json({
-    layout: { id: layout.id, name: layout.name, status: layout.status },
+    layout: { id: layout.id, name: layout.name, status: layout.status, notes: layout.notes ?? "" },
     room: {
       id: room.id,
       venueName: room.venueName,
@@ -59,28 +59,35 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       backgroundImagePxPerInch: room.backgroundImagePxPerInch,
     },
     equipment,
-    objects: layout.objects.map((o) => ({
-      id: o.id,
-      equipmentItemId: o.equipmentItemId,
-      parentObjectId: o.parentObjectId,
-      shape: o.shape,
-      x: o.x,
-      y: o.y,
-      rotation: o.rotation,
-      widthIn: o.widthIn,
-      lengthIn: o.lengthIn,
-      diameterIn: o.diameterIn,
-      zIndex: o.zIndex,
-      label: (o.metadata as { label?: string } | null)?.label ?? null,
-    })),
+    objects: layout.objects.map((o) => {
+      const metadata = o.metadata as { label?: string; linenType?: string; skirted?: boolean } | null;
+      return {
+        id: o.id,
+        equipmentItemId: o.equipmentItemId,
+        parentObjectId: o.parentObjectId,
+        shape: o.shape,
+        x: o.x,
+        y: o.y,
+        rotation: o.rotation,
+        widthIn: o.widthIn,
+        lengthIn: o.lengthIn,
+        diameterIn: o.diameterIn,
+        zIndex: o.zIndex,
+        label: metadata?.label ?? null,
+        linenType: metadata?.linenType ?? null,
+        skirted: metadata?.skirted ?? null,
+      };
+    }),
   });
 }
 
 const objectSchema = z.object({
   id: z.string(),
-  equipmentItemId: z.string(),
+  // Null for ad-hoc objects with no equipment definition (currently just
+  // text labels) — see lib/geometry/types.ts's LayoutObject.
+  equipmentItemId: z.string().nullable().optional(),
   parentObjectId: z.string().nullable().optional(),
-  shape: z.enum(["rect", "circle"]),
+  shape: z.enum(["rect", "circle", "text"]),
   x: z.number(),
   y: z.number(),
   rotation: z.number(),
@@ -89,8 +96,16 @@ const objectSchema = z.object({
   diameterIn: z.number().nullable().optional(),
   zIndex: z.number().optional(),
   label: z.string().nullable().optional(),
+  linenType: z.enum(["none", "cloth", "spandex"]).nullable().optional(),
+  skirted: z.boolean().nullable().optional(),
 });
-const putSchema = z.object({ objects: z.array(objectSchema) });
+const putSchema = z.object({
+  objects: z.array(objectSchema),
+  // Setup-crew notes for this event's layout — optional so older clients
+  // that don't send it yet leave the stored value untouched rather than
+  // clobbering it with an implicit empty string.
+  notes: z.string().nullable().optional(),
+});
 
 /**
  * PUT replaces the full object set for this layout. The client is never
@@ -148,7 +163,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
   const toLayoutObject = (o: z.infer<typeof objectSchema>): LayoutObject => ({
     id: o.id,
-    equipmentItemId: o.equipmentItemId,
+    equipmentItemId: o.equipmentItemId ?? null,
     parentObjectId: o.parentObjectId ?? null,
     shape: o.shape,
     x: o.x,
@@ -159,6 +174,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     diameterIn: o.diameterIn ?? undefined,
     zIndex: o.zIndex ?? 0,
     label: o.label ?? undefined,
+    linenType: o.linenType ?? undefined,
+    skirted: o.skirted ?? undefined,
   });
 
   const allObjects = parsed.data.objects.map(toLayoutObject);
@@ -174,11 +191,14 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
 
   const units = parents
     .map((p) => {
-      const item = equipmentById.get(p.equipmentItemId);
+      // Ad-hoc objects (text labels) have no equipmentItemId/library entry
+      // and aren't part of collision/clearance validation — skip them here
+      // rather than letting a null Map key through.
+      const item = p.equipmentItemId ? equipmentById.get(p.equipmentItemId) : undefined;
       if (!item) return null;
       const children = (childrenByParent.get(p.id) ?? [])
         .map((c) => {
-          const childItem = equipmentById.get(c.equipmentItemId);
+          const childItem = c.equipmentItemId ? equipmentById.get(c.equipmentItemId) : undefined;
           return childItem ? { object: c, item: childItem } : null;
         })
         .filter((c): c is { object: LayoutObject; item: EquipmentItem } => c !== null);
@@ -189,7 +209,18 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
   const boundary = layout.event.roomTemplate.boundaryJson as unknown as RoomBoundaryPoint[];
   const issues = validateLayout(units, boundary, obstacles);
 
+  const buildMetadata = (o: z.infer<typeof objectSchema>) => {
+    const meta: { label?: string; linenType?: string; skirted?: boolean } = {};
+    if (o.label) meta.label = o.label;
+    if (o.linenType) meta.linenType = o.linenType;
+    if (o.skirted) meta.skirted = o.skirted;
+    return Object.keys(meta).length ? meta : undefined;
+  };
+
   await prisma.$transaction([
+    ...(parsed.data.notes !== undefined
+      ? [prisma.layout.update({ where: { id }, data: { notes: parsed.data.notes } })]
+      : []),
     prisma.layoutObject.deleteMany({ where: { layoutId: id } }),
     ...(parsed.data.objects.length
       ? [
@@ -197,7 +228,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
             data: parsed.data.objects.map((o) => ({
               id: o.id,
               layoutId: id,
-              equipmentItemId: o.equipmentItemId,
+              equipmentItemId: o.equipmentItemId ?? null,
               parentObjectId: o.parentObjectId ?? null,
               shape: o.shape,
               x: o.x,
@@ -207,7 +238,7 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
               lengthIn: o.lengthIn ?? null,
               diameterIn: o.diameterIn ?? null,
               zIndex: o.zIndex ?? 0,
-              metadata: o.label ? { label: o.label } : undefined,
+              metadata: buildMetadata(o),
             })),
           }),
         ]

@@ -63,13 +63,32 @@ function generateChairsAround(
   // so dragging/rotating the table moves and turns its chairs for free.
   if (tableItem.shape === "circle" && tableItem.diameterIn) {
     const radius = tableItem.diameterIn / 2 + gap + (chairItem.lengthIn ?? 20) / 2;
-    for (let i = 0; i < count; i++) {
-      const angle = (i / count) * Math.PI * 2;
-      const x = radius * Math.cos(angle);
-      const y = radius * Math.sin(angle);
-      // Rotate chair so it faces the table center.
-      const rotation = (angle * 180) / Math.PI + 90;
-      chairs.push(makeChair(chairItem, parentId, x, y, rotation));
+    if (tableItem.chairArrangement === "crescent") {
+      // Half-moon: chairs fill a 180° arc on one side only, leaving the
+      // other half open so every seated guest faces the same direction
+      // (typical banquet "crescent round"). The open side defaults to the
+      // top (north) of the table in its own un-rotated frame — rotate the
+      // placed table afterward, same as any other item, to aim the open
+      // side at the stage/focal point. Evenly spaced including both arc
+      // endpoints, so e.g. 6 chairs span the full half-circle edge to edge.
+      const startAngle = Math.PI / 2; // 90° — arc runs 90°..270° (the bottom half)
+      const arcSpan = Math.PI; // 180°
+      for (let i = 0; i < count; i++) {
+        const angle = count > 1 ? startAngle + (i / (count - 1)) * arcSpan : startAngle + arcSpan / 2;
+        const x = radius * Math.cos(angle);
+        const y = radius * Math.sin(angle);
+        const rotation = (angle * 180) / Math.PI + 90;
+        chairs.push(makeChair(chairItem, parentId, x, y, rotation));
+      }
+    } else {
+      for (let i = 0; i < count; i++) {
+        const angle = (i / count) * Math.PI * 2;
+        const x = radius * Math.cos(angle);
+        const y = radius * Math.sin(angle);
+        // Rotate chair so it faces the table center.
+        const rotation = (angle * 180) / Math.PI + 90;
+        chairs.push(makeChair(chairItem, parentId, x, y, rotation));
+      }
     }
   } else if (tableItem.shape === "rect" && tableItem.widthIn && tableItem.lengthIn) {
     // A rect table renders with widthIn along its own local X axis and

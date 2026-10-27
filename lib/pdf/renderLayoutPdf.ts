@@ -9,6 +9,11 @@ export interface PdfRoomData {
   widthFt: number;
   lengthFt: number;
   boundary: { x: number; y: number }[];
+  /** Source floor-plan image, same fields as RoomTemplate — drawn as a background layer under everything else, same as the on-screen editor. */
+  backgroundImageUrl?: string;
+  backgroundImageWidthPx?: number;
+  backgroundImageHeightPx?: number;
+  backgroundImagePxPerInch?: number;
 }
 
 export interface PdfLayoutData {
@@ -19,6 +24,8 @@ export interface PdfLayoutData {
   eventName?: string;
   eventDateLabel?: string;
   guestCountTarget?: number;
+  /** Setup-crew notes for this event's layout, printed in the sidebar. */
+  setupNotes?: string;
   generatedAtLabel: string;
 }
 
@@ -73,12 +80,61 @@ export async function renderLayoutPdf(data: PdfLayoutData): Promise<Uint8Array> 
   });
 
   drawTitleBlock(page, font, fontBold, data);
+  await drawBackgroundImage(pdfDoc, page, data.room, toPagePoint);
   drawRoomBoundary(page, data.room, toPagePoint);
   drawEquipment(page, font, data.equipment, data.objects, toPagePoint, scalePtPerIn);
   drawScaleBar(page, font, fontBold, originX, MARGIN, scalePtPerIn);
   drawLegend(page, font, fontBold, data);
 
   return pdfDoc.save();
+}
+
+/**
+ * Draws the uploaded floor-plan image as a background layer, same as the
+ * on-screen editor's bgVisible Layer — this was previously missing from the
+ * PDF entirely (the renderer only ever drew the vector boundary/equipment,
+ * never fetched or embedded the source image). The image's top-left corner
+ * is always room-inches (0,0) and its size is backgroundImageWidthPx /
+ * backgroundImagePxPerInch — the same anchoring the editor's KonvaImage
+ * uses (see RoomCanvas.tsx) — so it lines up with the boundary/equipment
+ * drawn via the same toPagePoint transform. Fails soft: if the image can't
+ * be fetched or decoded, the rest of the PDF still renders normally.
+ */
+async function drawBackgroundImage(
+  pdfDoc: PDFDocument,
+  page: PDFPage,
+  room: PdfRoomData,
+  toPagePoint: (x: number, y: number) => { x: number; y: number }
+) {
+  const { backgroundImageUrl, backgroundImageWidthPx, backgroundImageHeightPx, backgroundImagePxPerInch } = room;
+  if (!backgroundImageUrl || !backgroundImageWidthPx || !backgroundImageHeightPx || !backgroundImagePxPerInch) {
+    return;
+  }
+  try {
+    const res = await fetch(backgroundImageUrl);
+    if (!res.ok) return;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+
+    const image =
+      bytes[0] === 0x89 && bytes[1] === 0x50 ? await pdfDoc.embedPng(bytes) : await pdfDoc.embedJpg(bytes);
+
+    const widthIn = backgroundImageWidthPx / backgroundImagePxPerInch;
+    const heightIn = backgroundImageHeightPx / backgroundImagePxPerInch;
+    const topLeft = toPagePoint(0, 0);
+    const bottomRight = toPagePoint(widthIn, heightIn);
+
+    page.drawImage(image, {
+      x: topLeft.x,
+      y: bottomRight.y,
+      width: bottomRight.x - topLeft.x,
+      height: topLeft.y - bottomRight.y,
+      opacity: 0.55,
+    });
+  } catch (err) {
+    // Never let a bad/unreachable image break the PDF — same "fail soft"
+    // posture the rest of this file takes toward missing equipment ids.
+    console.error("renderLayoutPdf: couldn't embed background image", err);
+  }
 }
 
 function drawTitleBlock(page: PDFPage, font: PDFFont, fontBold: PDFFont, data: PdfLayoutData) {
@@ -150,11 +206,17 @@ function drawEquipment(
   }
 
   for (const parent of parents) {
+    if (parent.shape === "text") {
+      drawTextLabel(page, font, parent, toPagePoint);
+      continue;
+    }
+    if (!parent.equipmentItemId) continue;
     const item = equipmentById.get(parent.equipmentItemId);
     if (!item) continue;
     drawShape(page, parent, item, toPagePoint, scalePtPerIn);
 
     for (const child of childrenByParent.get(parent.id) ?? []) {
+      if (!child.equipmentItemId) continue;
       const childItem = equipmentById.get(child.equipmentItemId);
       if (!childItem) continue;
       // Children are stored relative to the parent's local origin — rotate
@@ -189,6 +251,52 @@ function drawEquipment(
   }
 }
 
+/**
+ * A plain text annotation (table numbers, "Gift Table", etc.) — no
+ * equipment item backs it, just the object's own label/position/rotation.
+ * Drawn as centered text inside a thin rounded box so it reads clearly
+ * against the floor plan or other shapes behind it.
+ */
+function drawTextLabel(
+  page: PDFPage,
+  font: PDFFont,
+  object: LayoutObject,
+  toPagePoint: (x: number, y: number) => { x: number; y: number }
+) {
+  const text = object.label ?? "";
+  if (!text) return;
+  const center = toPagePoint(object.x, object.y);
+  const fontSize = 10;
+  const textWidth = font.widthOfTextAtSize(text, fontSize);
+  const paddingX = 5;
+  const paddingY = 4;
+  page.drawRectangle({
+    x: center.x - textWidth / 2 - paddingX,
+    y: center.y - fontSize / 2 - paddingY + 1,
+    width: textWidth + paddingX * 2,
+    height: fontSize + paddingY * 2,
+    color: rgb(1, 1, 1),
+    opacity: 0.85,
+    borderColor: rgb(0.2, 0.2, 0.2),
+    borderWidth: 0.75,
+  });
+  page.drawText(text, {
+    x: center.x - textWidth / 2,
+    y: center.y - fontSize / 2 + 1,
+    size: fontSize,
+    font,
+    color: rgb(0.1, 0.1, 0.1),
+  });
+}
+
+// Linen color-coding overrides a table's normal equipment-palette fill;
+// "none" (or unset) keeps the item's own color. Mirrors ShapeVisual's same
+// rule in the on-screen editor (components/editor/RoomCanvas.tsx).
+const LINEN_FILL: Record<string, RGB> = {
+  spandex: rgb(0.06, 0.06, 0.06),
+  cloth: rgb(0.55, 0.55, 0.55),
+};
+
 function drawShape(
   page: PDFPage,
   object: LayoutObject,
@@ -196,20 +304,22 @@ function drawShape(
   toPagePoint: (x: number, y: number) => { x: number; y: number },
   scalePtPerIn: number
 ) {
-  const color = hexToRgb(item.color);
+  const color = (object.linenType && LINEN_FILL[object.linenType]) || hexToRgb(item.color);
 
   if (object.shape === "circle") {
     const diameterIn = object.diameterIn ?? item.diameterIn ?? 24;
     const center = toPagePoint(object.x, object.y);
+    const radiusPt = (diameterIn / 2) * scalePtPerIn;
     page.drawEllipse({
       x: center.x,
       y: center.y,
-      xScale: (diameterIn / 2) * scalePtPerIn,
-      yScale: (diameterIn / 2) * scalePtPerIn,
+      xScale: radiusPt,
+      yScale: radiusPt,
       color,
       borderColor: rgb(0.15, 0.15, 0.15),
       borderWidth: 0.75,
     });
+    if (object.skirted) drawSkirtCircle(page, center, radiusPt);
     return;
   }
 
@@ -227,6 +337,61 @@ function drawShape(
     x: 0,
     y: 0,
     color,
+    borderColor: rgb(0.15, 0.15, 0.15),
+    borderWidth: 0.75,
+  });
+  if (object.skirted) drawSkirtRect(page, pagePoints);
+}
+
+/**
+ * Draws a wavy (scalloped) line just outside a circle table's edge to
+ * indicate it's skirted — a simple sine-wave-in-polar-coordinates path,
+ * not a literal fabric render, just a clear "this one has a skirt" marker
+ * matching the editor's own squiggly-outline convention.
+ */
+function drawSkirtCircle(page: PDFPage, center: { x: number; y: number }, radiusPt: number) {
+  const bumps = Math.max(10, Math.round(radiusPt / 4));
+  const amplitude = Math.max(2, radiusPt * 0.035);
+  const outerR = radiusPt + amplitude + 2;
+  const steps = bumps * 6;
+  const points: { x: number; y: number }[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * Math.PI * 2;
+    const r = outerR + amplitude * Math.sin(t * bumps);
+    points.push({ x: center.x + r * Math.cos(t), y: center.y + r * Math.sin(t) });
+  }
+  page.drawSvgPath(pathFlippedForPdfLib(points), {
+    x: 0,
+    y: 0,
+    borderColor: rgb(0.15, 0.15, 0.15),
+    borderWidth: 0.75,
+  });
+}
+
+/** Same idea as drawSkirtCircle, but walking a wavy line parallel to each side of a (possibly rotated) rectangle. */
+function drawSkirtRect(page: PDFPage, corners: { x: number; y: number }[]) {
+  const amplitude = 2.5;
+  const segmentsPerSide = 10;
+  const points: { x: number; y: number }[] = [];
+  for (let side = 0; side < 4; side++) {
+    const a = corners[side];
+    const b = corners[(side + 1) % 4];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    // Outward normal — corners are wound consistently by rectCorners(), so
+    // a fixed 90° turn points away from the rect's center for every side.
+    const nx = -dy / len;
+    const ny = dx / len;
+    for (let i = 0; i <= segmentsPerSide; i++) {
+      const t = i / segmentsPerSide;
+      const wave = amplitude * Math.sin(t * Math.PI * 4);
+      points.push({ x: a.x + dx * t + nx * wave, y: a.y + dy * t + ny * wave });
+    }
+  }
+  page.drawSvgPath(pathFlippedForPdfLib(points), {
+    x: 0,
+    y: 0,
     borderColor: rgb(0.15, 0.15, 0.15),
     borderWidth: 0.75,
   });
@@ -292,6 +457,7 @@ function drawLegend(page: PDFPage, font: PDFFont, fontBold: PDFFont, data: PdfLa
   const parents = data.objects.filter((o) => !o.parentObjectId);
   const countByEquipment = new Map<string, number>();
   for (const p of parents) {
+    if (!p.equipmentItemId) continue; // text labels aren't equipment
     countByEquipment.set(p.equipmentItemId, (countByEquipment.get(p.equipmentItemId) ?? 0) + 1);
   }
 
@@ -322,5 +488,40 @@ function drawLegend(page: PDFPage, font: PDFFont, fontBold: PDFFont, data: PdfLa
       font,
       color: rgb(0.35, 0.35, 0.35),
     });
+    y -= 14;
   }
+
+  if (data.setupNotes && data.setupNotes.trim()) {
+    y -= 10;
+    page.drawText("Setup Notes", { x, y, size: 11, font: fontBold, color: rgb(0.1, 0.1, 0.1) });
+    y -= 14;
+    const maxWidth = SIDEBAR_WIDTH;
+    const fontSize = 9;
+    for (const paragraph of data.setupNotes.split("\n")) {
+      for (const line of wrapText(paragraph, font, fontSize, maxWidth)) {
+        if (y < MARGIN + 10) break; // ran out of sidebar room — avoid drawing off the page
+        page.drawText(line, { x, y, size: fontSize, font, color: rgb(0.25, 0.25, 0.25) });
+        y -= 12;
+      }
+    }
+  }
+}
+
+/** Naive greedy word-wrap — good enough for a sidebar notes block, no justification needed. */
+function wrapText(text: string, font: PDFFont, size: number, maxWidth: number): string[] {
+  if (!text) return [""];
+  const words = text.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (font.widthOfTextAtSize(candidate, size) > maxWidth && current) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.length ? lines : [""];
 }

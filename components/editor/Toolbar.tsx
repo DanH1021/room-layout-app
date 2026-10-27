@@ -1,6 +1,6 @@
 "use client";
 
-import { EquipmentItem } from "@/lib/geometry/types";
+import { EquipmentItem, LinenType } from "@/lib/geometry/types";
 
 interface ToolbarProps {
   readOnly?: boolean;
@@ -43,6 +43,15 @@ interface ToolbarProps {
   onToggleSnapToItem: () => void;
   snapToItemGapIn: number;
   onSnapToItemGapChange: (gapIn: number) => void;
+  armedTextLabel: boolean;
+  onToggleArmedTextLabel: () => void;
+  hasTableSelection: boolean;
+  selectedTableLinenType: LinenType;
+  selectedTableSkirted: boolean;
+  onChangeLinenType: (linenType: LinenType) => void;
+  onToggleSkirted: () => void;
+  layoutNotes: string;
+  onLayoutNotesChange: (notes: string) => void;
 }
 
 export function Toolbar({
@@ -86,6 +95,15 @@ export function Toolbar({
   onToggleSnapToItem,
   snapToItemGapIn,
   onSnapToItemGapChange,
+  armedTextLabel,
+  onToggleArmedTextLabel,
+  hasTableSelection,
+  selectedTableLinenType,
+  selectedTableSkirted,
+  onChangeLinenType,
+  onToggleSkirted,
+  layoutNotes,
+  onLayoutNotesChange,
 }: ToolbarProps) {
   return (
     <div className="flex flex-col gap-4 w-64 shrink-0 border-r border-neutral-200 bg-neutral-50 p-4 h-full overflow-y-auto">
@@ -232,6 +250,71 @@ export function Toolbar({
         </div>
       )}
 
+      {!readOnly && (
+        <div className="border-t border-neutral-200 pt-4">
+          <h2 className="text-sm font-semibold text-neutral-700 mb-2">Text Label</h2>
+          <p className="text-xs text-neutral-500 mb-2">
+            Label tables with a number or name — &quot;Gift Table&quot;, &quot;12&quot;, etc.
+          </p>
+          <button
+            onClick={onToggleArmedTextLabel}
+            className={`w-full text-sm px-3 py-2 rounded-md border transition-colors ${
+              armedTextLabel
+                ? "bg-blue-50 border-blue-500 ring-1 ring-blue-500 text-blue-900"
+                : "bg-white border-neutral-300 hover:border-neutral-500 hover:bg-neutral-100"
+            }`}
+          >
+            {armedTextLabel ? "Click the room to place the label…" : "Add Text Label"}
+          </button>
+          <p className="text-xs text-neutral-500 mt-1.5">Double-click a placed label to edit its text.</p>
+        </div>
+      )}
+
+      {!readOnly && hasTableSelection && (
+        <div className="border-t border-neutral-200 pt-4">
+          <h2 className="text-sm font-semibold text-neutral-700 mb-2">Table Styling</h2>
+          <p className="text-xs text-neutral-600 mb-1.5">Linen</p>
+          <div className="flex items-center gap-1.5 mb-3">
+            <button
+              onClick={() => onChangeLinenType("none")}
+              className={`flex-1 text-xs px-2 py-1.5 rounded-md border transition-colors ${
+                selectedTableLinenType === "none"
+                  ? "bg-blue-50 border-blue-500 text-blue-900"
+                  : "bg-white border-neutral-300 hover:border-neutral-500"
+              }`}
+            >
+              None
+            </button>
+            <button
+              onClick={() => onChangeLinenType("cloth")}
+              className={`flex-1 text-xs px-2 py-1.5 rounded-md border transition-colors flex items-center justify-center gap-1.5 ${
+                selectedTableLinenType === "cloth"
+                  ? "bg-blue-50 border-blue-500 text-blue-900"
+                  : "bg-white border-neutral-300 hover:border-neutral-500"
+              }`}
+            >
+              <span className="inline-block w-2.5 h-2.5 rounded-sm bg-neutral-400 border border-neutral-500" />
+              Cloth
+            </button>
+            <button
+              onClick={() => onChangeLinenType("spandex")}
+              className={`flex-1 text-xs px-2 py-1.5 rounded-md border transition-colors flex items-center justify-center gap-1.5 ${
+                selectedTableLinenType === "spandex"
+                  ? "bg-blue-50 border-blue-500 text-blue-900"
+                  : "bg-white border-neutral-300 hover:border-neutral-500"
+              }`}
+            >
+              <span className="inline-block w-2.5 h-2.5 rounded-sm bg-neutral-900 border border-neutral-900" />
+              Spandex
+            </button>
+          </div>
+          <label className="text-xs text-neutral-600 flex items-center gap-2">
+            <input type="checkbox" checked={selectedTableSkirted} onChange={onToggleSkirted} />
+            Skirted (shows a wavy outline)
+          </label>
+        </div>
+      )}
+
       <div className="border-t border-neutral-200 pt-4">
         {!readOnly && (
           <>
@@ -349,6 +432,22 @@ export function Toolbar({
           </label>
         </div>
       )}
+
+      <div className="border-t border-neutral-200 pt-4">
+        <h2 className="text-sm font-semibold text-neutral-700 mb-2">Setup Notes</h2>
+        <p className="text-xs text-neutral-500 mb-2">
+          Printed in the exported PDF&apos;s sidebar — instructions for the setup crew (e.g. &quot;drape the head
+          table in ivory&quot;, &quot;leave a path to the kitchen door&quot;).
+        </p>
+        <textarea
+          value={layoutNotes}
+          onChange={(e) => onLayoutNotesChange(e.target.value)}
+          disabled={readOnly}
+          rows={4}
+          placeholder="Notes for the setup crew…"
+          className="w-full border border-neutral-300 rounded-md px-2 py-1.5 text-sm disabled:bg-neutral-100 disabled:text-neutral-500"
+        />
+      </div>
 
       <div className="border-t border-neutral-200 pt-4 text-xs text-neutral-500 leading-relaxed">
         {readOnly

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Stage, Layer, Rect, Circle, Text, Group, Transformer, Line, Shape, Image as KonvaImage } from "react-konva";
 import Konva from "konva";
-import { EquipmentItem, LayoutObject, RoomFeatureRecord, RoomTemplate, roomFeatureToObstacle } from "@/lib/geometry/types";
+import { EquipmentItem, LayoutObject, LinenType, RoomFeatureRecord, RoomTemplate, roomFeatureToObstacle } from "@/lib/geometry/types";
 import { instantiateEquipment } from "@/lib/geometry/placement";
 import { inchesToPx, pxToInches, feetToInches, inchesToFeetLabel } from "@/lib/geometry/scale";
 import { polygonBoundingBox } from "@/lib/geometry/room";
@@ -111,6 +111,17 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   const [snapToItemEnabled, setSnapToItemEnabled] = useState(false);
   const [snapToItemGapIn, setSnapToItemGapIn] = useState(56);
 
+  // Text-label tool: places a free-standing text annotation (table numbers,
+  // "Gift Table", etc.) at the clicked point — see lib/geometry/types.ts's
+  // ObjectShapeKind for how these are represented (shape "text", no
+  // equipmentItemId). Content is entered/edited via a plain prompt() rather
+  // than an in-canvas text editor, to keep this within scope.
+  const [armedTextLabel, setArmedTextLabel] = useState(false);
+
+  // Setup-crew notes for this event's layout (printed in the exported PDF's
+  // sidebar) — loaded from and saved back to Layout.notes.
+  const [layoutNotes, setLayoutNotes] = useState("");
+
   const containerRef = useRef<HTMLDivElement>(null);
   const groupRefs = useRef<Record<string, Konva.Group>>({});
   const transformerRef = useRef<Konva.Transformer>(null);
@@ -131,6 +142,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
         setRoom(nullsToUndefined(data.room));
         setEquipmentList((data.equipment as EquipmentItem[]).map(nullsToUndefined));
         setObjects((data.objects as LayoutObject[]).map(nullsToUndefined));
+        setLayoutNotes(data.layout?.notes ?? "");
         setLoadState("ready");
       })
       .catch((err) => {
@@ -143,6 +155,11 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   }, [layoutId]);
 
   const equipmentById = useMemo(() => new Map(equipmentList.map((e) => [e.id, e])), [equipmentList]);
+  // The "Add Equipment"/"Add a Row" pickers only offer non-hidden items —
+  // equipmentList itself (and equipmentById/getEquipmentItem below) stays
+  // the FULL list so any layout that already placed a since-hidden item
+  // (e.g. a retired 60" round) keeps rendering correctly.
+  const pickableEquipment = useMemo(() => equipmentList.filter((e) => !e.hidden), [equipmentList]);
   const getEquipmentItem = useCallback(
     (id: string): EquipmentItem => {
       const item = equipmentById.get(id);
@@ -159,7 +176,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
       const res = await fetch(`/api/layouts/${layoutId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ objects }),
+        body: JSON.stringify({ objects, notes: layoutNotes }),
       });
       if (!res.ok) throw new Error(`Save failed (${res.status})`);
       setSaveStatus("saved");
@@ -170,7 +187,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
       setSaveStatus("error");
       return false;
     }
-  }, [objects, layoutId, readOnly]);
+  }, [objects, layoutId, readOnly, layoutNotes]);
 
   // The PDF route reads the layout straight from the database (so the export
   // matches exactly what the /export-pdf link would produce if reloaded or
@@ -228,6 +245,9 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
       } else if (e.key === "Escape" && armedRow) {
         e.preventDefault();
         setArmedRow(false);
+      } else if (e.key === "Escape" && armedTextLabel) {
+        e.preventDefault();
+        setArmedTextLabel(false);
       } else if (e.key === "Escape" && measureMode) {
         e.preventDefault();
         if (measureStart) {
@@ -241,7 +261,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedIds, objects, saveLayout, armedEquipmentId, readOnly, measureMode, measureStart, armedRow]);
+  }, [selectedIds, objects, saveLayout, armedEquipmentId, readOnly, measureMode, measureStart, armedRow, armedTextLabel]);
 
   function toggleMeasureMode() {
     setMeasureMode((prev) => {
@@ -249,12 +269,49 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
       if (next) {
         setArmedEquipmentId(null); // mutually exclusive with placing equipment
         setArmedRow(false); // and with row placement
+        setArmedTextLabel(false); // and with text-label placement
       }
       setMeasureStart(null);
       setMeasureLive(null);
       setMeasureCompleted(null);
       return next;
     });
+  }
+
+  function toggleArmedTextLabel() {
+    if (readOnly) return;
+    setArmedEquipmentId(null); // mutually exclusive with placing equipment
+    setArmedRow(false); // and with row placement
+    setMeasureMode(false); // and with measuring
+    setArmedTextLabel((prev) => !prev);
+  }
+
+  /** Places a free-standing text label at the given room-space point (inches), prompting for its content. */
+  function placeTextLabelAt(xIn: number, yIn: number) {
+    if (readOnly) return;
+    const text = window.prompt('Label text (e.g. a table number or "Gift Table"):', "Label");
+    if (text === null) return; // cancelled
+    const newObject: LayoutObject = {
+      id: uuid(),
+      equipmentItemId: null,
+      parentObjectId: null,
+      shape: "text",
+      x: snap(xIn),
+      y: snap(yIn),
+      rotation: 0,
+      zIndex: 3,
+      label: text.trim() || "Label",
+    };
+    setObjects((prev) => [...prev, newObject]);
+    setSelectedIds(new Set([newObject.id]));
+  }
+
+  /** Double-click handler for an existing text label — re-prompts to edit its content in place. */
+  function editTextLabel(parent: LayoutObject) {
+    if (readOnly) return;
+    const next = window.prompt("Edit label text:", parent.label ?? "");
+    if (next === null) return;
+    updateObject(parent.id, { label: next.trim() || "Label" });
   }
 
   /** Stage pointer -> room inches, same math the "place equipment" click handler uses. */
@@ -282,14 +339,21 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
 
   const issues: LayoutIssue[] = useMemo(() => {
     if (!room) return [];
-    const units = parents.map((p) => ({
-      object: p,
-      item: getEquipmentItem(p.equipmentItemId),
-      children: (childrenByParent[p.id] ?? []).map((c) => ({
-        object: c,
-        item: getEquipmentItem(c.equipmentItemId),
-      })),
-    }));
+    // Text labels have no equipmentItemId/library entry and aren't part of
+    // collision/clearance validation — exclude them rather than letting
+    // getEquipmentItem throw.
+    const units = parents
+      .filter((p) => p.shape !== "text" && p.equipmentItemId)
+      .map((p) => ({
+        object: p,
+        item: getEquipmentItem(p.equipmentItemId!),
+        children: (childrenByParent[p.id] ?? [])
+          .filter((c) => c.equipmentItemId)
+          .map((c) => ({
+            object: c,
+            item: getEquipmentItem(c.equipmentItemId!),
+          })),
+      }));
     const obstacles = (room.features ?? []).map(roomFeatureToObstacle);
     return validateLayout(units, room.boundary, obstacles);
   }, [parents, childrenByParent, room, getEquipmentItem]);
@@ -308,6 +372,35 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
     () => (equipmentList.length ? computeCapacity(objects, getEquipmentItem) : 0),
     [objects, equipmentList, getEquipmentItem]
   );
+
+  // Which selected objects are actual tables (not chairs, not text labels)
+  // — these are the only objects linen color-coding / skirting apply to.
+  // Drives the "Table Styling" panel; the panel shows/applies based on the
+  // FIRST selected table when several are selected at once.
+  const selectedTableParents = useMemo(
+    () =>
+      parents.filter(
+        (p) =>
+          selectedIds.has(p.id) &&
+          p.shape !== "text" &&
+          !!p.equipmentItemId &&
+          equipmentById.get(p.equipmentItemId)?.category === "table"
+      ),
+    [parents, selectedIds, equipmentById]
+  );
+
+  function setLinenTypeForSelected(linenType: LinenType) {
+    if (readOnly || selectedTableParents.length === 0) return;
+    const ids = new Set(selectedTableParents.map((p) => p.id));
+    setObjects((prev) => prev.map((o) => (ids.has(o.id) ? { ...o, linenType } : o)));
+  }
+
+  function toggleSkirtedForSelected() {
+    if (readOnly || selectedTableParents.length === 0) return;
+    const ids = new Set(selectedTableParents.map((p) => p.id));
+    const current = !!selectedTableParents[0].skirted;
+    setObjects((prev) => prev.map((o) => (ids.has(o.id) ? { ...o, skirted: !current } : o)));
+  }
 
   // The bounding box of the actual boundary polygon is the real rendering
   // extent — for today's rectangular seeded rooms this equals widthFt/lengthFt
@@ -347,6 +440,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   function armEquipment(equipmentItemId: string) {
     if (readOnly) return;
     setArmedRow(false); // mutually exclusive with row placement
+    setArmedTextLabel(false); // and with text-label placement
     setArmedEquipmentId((prev) => (prev === equipmentItemId ? null : equipmentItemId));
   }
 
@@ -405,6 +499,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   function toggleArmedRow() {
     if (readOnly || !rowEquipmentId) return;
     setArmedEquipmentId(null); // mutually exclusive with single-item placement
+    setArmedTextLabel(false); // and with text-label placement
     setArmedRow((prev) => !prev);
   }
 
@@ -518,7 +613,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
     <div className="flex h-full w-full">
       <Toolbar
         readOnly={readOnly}
-        equipment={equipmentList}
+        equipment={pickableEquipment}
         onAdd={armEquipment}
         armedEquipmentId={armedEquipmentId}
         onDuplicate={duplicateSelected}
@@ -561,6 +656,15 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
         onToggleSnapToItem={() => setSnapToItemEnabled((v) => !v)}
         snapToItemGapIn={snapToItemGapIn}
         onSnapToItemGapChange={setSnapToItemGapIn}
+        armedTextLabel={armedTextLabel}
+        onToggleArmedTextLabel={toggleArmedTextLabel}
+        hasTableSelection={selectedTableParents.length > 0}
+        selectedTableLinenType={selectedTableParents[0]?.linenType ?? "none"}
+        selectedTableSkirted={!!selectedTableParents[0]?.skirted}
+        onChangeLinenType={setLinenTypeForSelected}
+        onToggleSkirted={toggleSkirtedForSelected}
+        layoutNotes={layoutNotes}
+        onLayoutNotesChange={setLayoutNotes}
       />
       <div ref={containerRef} className="flex-1 h-full bg-neutral-100 overflow-hidden relative">
         <div className="absolute top-2 left-2 z-10 bg-white/90 backdrop-blur px-3 py-1.5 rounded-md text-xs text-neutral-700 shadow-sm flex items-center gap-3">
@@ -619,14 +723,26 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
             {measureStart ? "Click the second point — press Esc to cancel" : "Click a starting point — press Esc to stop measuring"}
           </div>
         )}
+        {armedTextLabel && (
+          <div className="absolute top-12 left-1/2 -translate-x-1/2 z-10 bg-blue-600 text-white text-xs px-3 py-1.5 rounded-full shadow-sm">
+            Click to place a text label — press Esc to cancel
+          </div>
+        )}
         <Stage
           width={containerSize.width}
           height={containerSize.height}
           draggable={!measureMode}
-          style={armedEquipmentId || armedRow ? { cursor: "crosshair" } : measureMode ? { cursor: "crosshair" } : undefined}
+          style={
+            armedEquipmentId || armedRow || armedTextLabel || measureMode ? { cursor: "crosshair" } : undefined
+          }
           onClick={(e) => {
             if (e.target !== e.target.getStage()) return;
             const stage = e.target.getStage();
+            if (armedTextLabel && stage) {
+              const pt = pointerToRoomInches(stage);
+              if (pt) placeTextLabelAt(pt.x, pt.y);
+              return;
+            }
             if (measureMode && stage) {
               const pt = pointerToRoomInches(stage);
               if (!pt) return;
@@ -764,7 +880,8 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
               ))}
 
               {parents.map((parent) => {
-              const item = getEquipmentItem(parent.equipmentItemId);
+              const isText = parent.shape === "text";
+              const item = isText ? null : getEquipmentItem(parent.equipmentItemId!);
               const children = childrenByParent[parent.id] ?? [];
               return (
                 <Group
@@ -776,6 +893,14 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
                   y={inchesToPx(parent.y - boundingBox.minY, zoom)}
                   rotation={parent.rotation}
                   draggable={!readOnly}
+                  onDblClick={(e) => {
+                    e.cancelBubble = true;
+                    if (isText) editTextLabel(parent);
+                  }}
+                  onDblTap={(e) => {
+                    e.cancelBubble = true;
+                    if (isText) editTextLabel(parent);
+                  }}
                   onClick={(e) => {
                     e.cancelBubble = true;
                     const toggle = e.evt.ctrlKey || e.evt.metaKey;
@@ -819,20 +944,28 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
                     updateObject(parent.id, { rotation });
                   }}
                 >
-                  <ShapeVisual
-                    object={{ ...parent, x: 0, y: 0, rotation: 0 }}
-                    zoom={zoom}
-                    color={item.color}
-                    issueSeverity={issueSeverityByObjectId[parent.id]}
-                  />
-                  {children.map((c) => (
-                    <ShapeVisual
-                      key={c.id}
-                      object={c}
-                      zoom={zoom}
-                      color={getEquipmentItem(c.equipmentItemId).color}
-                    />
-                  ))}
+                  {isText ? (
+                    <TextLabelVisual text={parent.label ?? "Label"} selected={selectedIds.has(parent.id)} />
+                  ) : (
+                    <>
+                      <ShapeVisual
+                        object={{ ...parent, x: 0, y: 0, rotation: 0 }}
+                        zoom={zoom}
+                        color={item!.color}
+                        issueSeverity={issueSeverityByObjectId[parent.id]}
+                        linenType={parent.linenType}
+                        skirted={parent.skirted}
+                      />
+                      {children.map((c) => (
+                        <ShapeVisual
+                          key={c.id}
+                          object={c}
+                          zoom={zoom}
+                          color={c.equipmentItemId ? getEquipmentItem(c.equipmentItemId).color : "#5b7a9d"}
+                        />
+                      ))}
+                    </>
+                  )}
                 </Group>
               );
               })}
@@ -885,27 +1018,41 @@ const ISSUE_COLORS: Record<IssueSeverity, string> = {
   warning: "#d97706",
 };
 
+// Linen color-coding overrides a table's normal equipment-palette fill;
+// "none"/unset keeps the item's own color. Spandex reads as solid black,
+// cloth as a mid gray — matching standard catering-diagram convention.
+const LINEN_FILL: Record<string, string> = {
+  spandex: "#111111",
+  cloth: "#9ca3af",
+};
+
 function ShapeVisual({
   object,
   zoom,
   color,
   issueSeverity,
+  linenType,
+  skirted,
 }: {
   object: LayoutObject;
   zoom: number;
   color: string;
   issueSeverity?: IssueSeverity;
+  linenType?: LinenType;
+  skirted?: boolean;
 }) {
   const x = inchesToPx(object.x, zoom);
   const y = inchesToPx(object.y, zoom);
   const stroke = issueSeverity ? ISSUE_COLORS[issueSeverity] : "#262626";
   const strokeWidth = issueSeverity ? 3 : 1;
+  const fill = (linenType && LINEN_FILL[linenType]) || color;
 
   if (object.shape === "circle" && object.diameterIn) {
     const r = inchesToPx(object.diameterIn / 2, zoom);
     return (
       <>
-        <Circle x={x} y={y} radius={r} fill={color} stroke={stroke} strokeWidth={strokeWidth} rotation={object.rotation} />
+        <Circle x={x} y={y} radius={r} fill={fill} stroke={stroke} strokeWidth={strokeWidth} rotation={object.rotation} />
+        {skirted && <SkirtOutline shape="circle" x={x} y={y} radius={r} />}
         {r > 18 && (
           <Text
             x={x - r}
@@ -925,19 +1072,150 @@ function ShapeVisual({
   const w = inchesToPx(object.widthIn ?? 18, zoom);
   const h = inchesToPx(object.lengthIn ?? 18, zoom);
   return (
-    <Rect
+    <>
+      <Rect
+        x={x}
+        y={y}
+        width={w}
+        height={h}
+        offsetX={w / 2}
+        offsetY={h / 2}
+        rotation={object.rotation}
+        fill={fill}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+        cornerRadius={2}
+      />
+      {skirted && <SkirtOutline shape="rect" x={x} y={y} width={w} height={h} rotation={object.rotation} />}
+    </>
+  );
+}
+
+/**
+ * A wavy/scalloped line drawn just outside a table's edge to indicate it's
+ * skirted — a simple sine-wave-in-polar-coordinates (circle) or
+ * sine-wave-along-each-side (rect) path. Not a literal fabric render, just
+ * a clear "this one has a skirt" marker, consistent with the same
+ * convention used in the exported PDF (lib/pdf/renderLayoutPdf.ts).
+ */
+function SkirtOutline(
+  props:
+    | { shape: "circle"; x: number; y: number; radius: number }
+    | { shape: "rect"; x: number; y: number; width: number; height: number; rotation: number }
+) {
+  if (props.shape === "circle") {
+    const { x, y, radius } = props;
+    const bumps = Math.max(10, Math.round(radius / 4));
+    const amplitude = Math.max(2, radius * 0.05);
+    const outerR = radius + amplitude + 2;
+    return (
+      <Shape
+        x={x}
+        y={y}
+        listening={false}
+        stroke="#262626"
+        strokeWidth={1}
+        sceneFunc={(ctx, shapeNode) => {
+          ctx.beginPath();
+          const steps = bumps * 6;
+          for (let i = 0; i <= steps; i++) {
+            const t = (i / steps) * Math.PI * 2;
+            const r = outerR + amplitude * Math.sin(t * bumps);
+            const px = r * Math.cos(t);
+            const py = r * Math.sin(t);
+            if (i === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.closePath();
+          ctx.strokeShape(shapeNode);
+        }}
+      />
+    );
+  }
+
+  const { x, y, width, height, rotation } = props;
+  const amplitude = 2.5;
+  const segmentsPerSide = 10;
+  const halfW = width / 2 + 3;
+  const halfH = height / 2 + 3;
+  const corners = [
+    { x: -halfW, y: -halfH },
+    { x: halfW, y: -halfH },
+    { x: halfW, y: halfH },
+    { x: -halfW, y: halfH },
+  ];
+  return (
+    <Shape
       x={x}
       y={y}
-      width={w}
-      height={h}
-      offsetX={w / 2}
-      offsetY={h / 2}
-      rotation={object.rotation}
-      fill={color}
-      stroke={stroke}
-      strokeWidth={strokeWidth}
-      cornerRadius={2}
+      rotation={rotation}
+      listening={false}
+      stroke="#262626"
+      strokeWidth={1}
+      sceneFunc={(ctx, shapeNode) => {
+        ctx.beginPath();
+        let first = true;
+        for (let side = 0; side < 4; side++) {
+          const a = corners[side];
+          const b = corners[(side + 1) % 4];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const len = Math.hypot(dx, dy) || 1;
+          const nx = -dy / len;
+          const ny = dx / len;
+          for (let i = 0; i <= segmentsPerSide; i++) {
+            const t = i / segmentsPerSide;
+            const wave = amplitude * Math.sin(t * Math.PI * 4);
+            const px = a.x + dx * t + nx * wave;
+            const py = a.y + dy * t + ny * wave;
+            if (first) {
+              ctx.moveTo(px, py);
+              first = false;
+            } else {
+              ctx.lineTo(px, py);
+            }
+          }
+        }
+        ctx.closePath();
+        ctx.strokeShape(shapeNode);
+      }}
     />
+  );
+}
+
+/** A free-standing text annotation (table numbers, "Gift Table", etc.) — see lib/geometry/types.ts's ObjectShapeKind. */
+function TextLabelVisual({ text, selected }: { text: string; selected?: boolean }) {
+  const fontSize = 14;
+  const paddingX = 6;
+  const paddingY = 4;
+  // Konva's Text doesn't report its own rendered width before paint, so
+  // approximate with a monospace-ish average character width — close
+  // enough for a background box that just needs to roughly fit the text.
+  const approxWidth = text.length * fontSize * 0.56 + paddingX * 2;
+  const approxHeight = fontSize + paddingY * 2;
+  return (
+    <Group>
+      <Rect
+        x={-approxWidth / 2}
+        y={-approxHeight / 2}
+        width={approxWidth}
+        height={approxHeight}
+        fill="#ffffff"
+        stroke={selected ? "#2563eb" : "#44403c"}
+        strokeWidth={selected ? 2 : 1}
+        cornerRadius={4}
+      />
+      <Text
+        x={-approxWidth / 2}
+        y={-fontSize / 2}
+        width={approxWidth}
+        align="center"
+        text={text}
+        fontSize={fontSize}
+        fontStyle="bold"
+        fill="#1c1917"
+      />
+    </Group>
   );
 }
 

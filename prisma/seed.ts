@@ -300,7 +300,12 @@ async function main() {
     const equipmentById = new Map<string, EquipmentItem>(
       equipmentItems.map((e) => [
         e.id,
-        { ...e, category: e.category as EquipmentItem["category"], shape: e.shape as EquipmentItem["shape"] },
+        {
+          ...e,
+          category: e.category as EquipmentItem["category"],
+          shape: e.shape as EquipmentItem["shape"],
+          chairArrangement: e.chairArrangement as EquipmentItem["chairArrangement"],
+        },
       ])
     );
     const getEquipment = (id: string) => {
@@ -309,7 +314,7 @@ async function main() {
       return item;
     };
     const starterObjects = [
-      ...instantiateEquipment("eq-round-60", 15 * 12, 10 * 12, getEquipment),
+      ...instantiateEquipment("eq-round-72-8top", 15 * 12, 10 * 12, getEquipment),
       ...instantiateEquipment("eq-rect-6ft", 35 * 12, 10 * 12, getEquipment),
     ];
     await prisma.layoutObject.createMany({

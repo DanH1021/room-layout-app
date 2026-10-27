@@ -83,7 +83,7 @@ describe("executeStructuredRequest", () => {
       room
     );
     const tables = result.objects.filter((o) => !o.parentObjectId);
-    const shapes = tables.map((t) => toShape(t, getEquipment(t.equipmentItemId)));
+    const shapes = tables.map((t) => toShape(t, getEquipment(t.equipmentItemId!)));
     for (let i = 0; i < shapes.length; i++) {
       for (let j = i + 1; j < shapes.length; j++) {
         expect(shapesOverlap(shapes[i], shapes[j])).toBe(false);
@@ -106,10 +106,10 @@ describe("executeStructuredRequest", () => {
       .filter((o) => !o.parentObjectId)
       .map((o) => ({
         object: o,
-        item: getEquipment(o.equipmentItemId),
+        item: getEquipment(o.equipmentItemId!),
         children: result.objects
           .filter((c) => c.parentObjectId === o.id)
-          .map((c) => ({ object: c, item: getEquipment(c.equipmentItemId) })),
+          .map((c) => ({ object: c, item: getEquipment(c.equipmentItemId!) })),
       }));
     const boundary = [
       { x: 0, y: 0 },
@@ -131,7 +131,7 @@ describe("executeStructuredRequest", () => {
     );
     const tables = result.objects.filter((o) => !o.parentObjectId);
     expect(tables).toHaveLength(3); // 1 existing + 2 newly added
-    const shapes = tables.map((t) => toShape(t, getEquipment(t.equipmentItemId)));
+    const shapes = tables.map((t) => toShape(t, getEquipment(t.equipmentItemId!)));
     for (let i = 0; i < shapes.length; i++) {
       for (let j = i + 1; j < shapes.length; j++) {
         expect(shapesOverlap(shapes[i], shapes[j])).toBe(false);

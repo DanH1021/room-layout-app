@@ -42,7 +42,7 @@ function getFootprintRadius(item: EquipmentItem, getEquipment: (id: string) => E
 
   const radius = Math.max(
     farthestPointDistance(toShape(unit, item), center),
-    ...children.map((c) => farthestPointDistance(toShape(c, getEquipment(c.equipmentItemId)), center)),
+    ...children.map((c) => farthestPointDistance(toShape(c, getEquipment(c.equipmentItemId!)), center)),
     0
   ) + item.clearanceIn;
 

@@ -72,47 +72,49 @@ function generateChairsAround(
       chairs.push(makeChair(chairItem, parentId, x, y, rotation));
     }
   } else if (tableItem.shape === "rect" && tableItem.widthIn && tableItem.lengthIn) {
-    // Distribute chairs along the two long sides first, then short sides if needed.
+    // A rect table renders with widthIn along its own local X axis and
+    // lengthIn along local Y (RoomCanvas draws width -> Rect width, length
+    // -> Rect height) — so for a typical banquet table (30" wide, 72-96"
+    // long) the two LONG sides are on the left and right, running
+    // top-to-bottom, not the top and bottom running left-to-right. Chairs
+    // used to be distributed the other way around, which put them on the
+    // short ends instead of along the table's length. Distribute along the
+    // two long (left/right) sides first, then the short (top/bottom) ends
+    // if there are more chairs than the long sides can hold.
     const halfLen = tableItem.lengthIn / 2;
     const halfWid = tableItem.widthIn / 2;
+    const chairDepth = gap + (chairItem.lengthIn ?? 20) / 2;
     const chairSpan = (chairItem.widthIn ?? 18) + 2;
     const perLongSide = Math.max(1, Math.floor(tableItem.lengthIn / chairSpan));
     const positions: { x: number; y: number; rotation: number }[] = [];
 
-    const addSide = (n: number, side: "top" | "bottom" | "left" | "right") => {
+    const addLongSide = (n: number, side: "left" | "right") => {
       for (let i = 0; i < n; i++) {
-        const t = (i + 1) / (n + 1); // 0..1 along the side
-        if (side === "top") {
-          positions.push({
-            x: -halfLen + t * tableItem.lengthIn!,
-            y: -halfWid - gap - (chairItem.lengthIn ?? 20) / 2,
-            rotation: 180,
-          });
-        } else if (side === "bottom") {
-          positions.push({
-            x: -halfLen + t * tableItem.lengthIn!,
-            y: halfWid + gap + (chairItem.lengthIn ?? 20) / 2,
-            rotation: 0,
-          });
+        const t = (i + 1) / (n + 1); // 0..1 along the table's length
+        const y = -halfLen + t * tableItem.lengthIn!;
+        if (side === "left") {
+          positions.push({ x: -halfWid - chairDepth, y, rotation: 270 });
+        } else {
+          positions.push({ x: halfWid + chairDepth, y, rotation: 90 });
         }
       }
     };
 
     let remaining = count;
-    const topCount = Math.min(perLongSide, Math.ceil(remaining / 2));
-    addSide(topCount, "top");
-    remaining -= topCount;
-    const bottomCount = Math.min(perLongSide, remaining);
-    addSide(bottomCount, "bottom");
-    remaining -= bottomCount;
+    const leftCount = Math.min(perLongSide, Math.ceil(remaining / 2));
+    addLongSide(leftCount, "left");
+    remaining -= leftCount;
+    const rightCount = Math.min(perLongSide, remaining);
+    addLongSide(rightCount, "right");
+    remaining -= rightCount;
 
-    // Any leftover chairs (e.g. 10-top on an 8ft table) go on the short ends.
+    // Any leftover chairs (e.g. a 10-top on an 8ft table) go on the short ends.
     if (remaining > 0) {
-      positions.push({ x: -halfLen - gap - (chairItem.lengthIn ?? 20) / 2, y: 0, rotation: 90 });
+      positions.push({ x: 0, y: -halfLen - chairDepth, rotation: 180 });
       remaining--;
     }
     if (remaining > 0) {
-      positions.push({ x: halfLen + gap + (chairItem.lengthIn ?? 20) / 2, y: 0, rotation: -90 });
+      positions.push({ x: 0, y: halfLen + chairDepth, rotation: 0 });
       remaining--;
     }
 

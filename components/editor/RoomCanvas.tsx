@@ -301,6 +301,14 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   const roomLengthPx = inchesToPx(roomLengthIn, zoom);
 
   const bgImage = useHTMLImage(room?.backgroundImageUrl);
+  // Whether the floor-plan image is actually being drawn this render — used
+  // both to gate the background Layer itself and to make the room boundary
+  // fill transparent when it is. The boundary's opaque white fill used to
+  // always paint over the background Layer regardless of this, since Konva
+  // layers composite in JSX order and the boundary Layer was declared AFTER
+  // (so on top of) the background Layer — the floor plan was loading and
+  // sizing correctly the whole time, just permanently hidden underneath it.
+  const bgVisible = showBackground && !!room?.backgroundImageUrl && !!bgImage;
 
   const stageOffset = {
     x: Math.max(STAGE_PADDING_PX, (containerSize.width - roomWidthPx) / 2),
@@ -530,7 +538,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
             if (pt) setMeasureLive(pt);
           }}
         >
-          {showBackground && room.backgroundImageUrl && bgImage && (
+          {bgVisible && (
             <Layer x={stageOffset.x} y={stageOffset.y}>
               <Group
                 clipFunc={
@@ -576,7 +584,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
                 inchesToPx(p.y - boundingBox.minY, zoom),
               ])}
               closed
-              fill="#ffffff"
+              fill={bgVisible ? undefined : "#ffffff"}
               stroke="#44403c"
               strokeWidth={6}
               listening={false}

@@ -1,7 +1,11 @@
 import { EquipmentItem, LayoutObject, Obstacle, RoomBoundaryPoint } from "@/lib/geometry/types";
-import { CircleShape, Shape, circleVsCircle, rectCorners, shapesOverlap } from "@/lib/geometry/collision";
+import { Shape, rectCorners, shapesOverlap } from "@/lib/geometry/collision";
 import { shapeFullyInRoom } from "@/lib/geometry/room";
 
+// "clearance_conflict" is no longer produced (see validateLayout below, per
+// Dan's request to drop the "too close for guest access" warning entirely)
+// but stays in the union so any already-persisted LayoutIssue rows of that
+// type still type-check wherever this type is read back from the DB.
 export type IssueType = "collision" | "clearance_conflict" | "room_boundary" | "obstacle_collision";
 export type IssueSeverity = "error" | "warning";
 
@@ -50,20 +54,20 @@ interface Unit {
   item: EquipmentItem;
   /** The bare table/equipment shape — used for hard collisions and room-boundary checks. */
   bareShape: Shape;
-  /**
-   * A bounding circle around the whole unit — the table plus every chair
-   * attached to it, plus its equipment clearance allowance — used for the
-   * softer "too close for guest access" warning. A hard-collision check on
-   * the bare table alone would miss two tables' *chairs* overlapping while
-   * the tables themselves stay apart, which is the case that actually
-   * matters to a floor planner.
-   */
-  footprint: CircleShape;
 }
 
 /**
  * Authoritative layout validation: runs identically client-side (live drag
  * feedback) and server-side (pre-save gate).
+ *
+ * This intentionally does NOT flag tables/chairs that are merely close
+ * together (no "clearance warning") — only real physical overlaps (hard
+ * collisions), objects extending past the room boundary, and obstacle
+ * collisions are reported. Per Dan's request, the softer "too close for
+ * guest access" footprint-clearance check this used to run was removed
+ * entirely rather than just hidden, since sales staff intentionally pack
+ * tables tighter than the clearance allowance in real layouts and the
+ * warning was just noise.
  */
 export function validateLayout(
   units: { object: LayoutObject; item: EquipmentItem; children?: { object: LayoutObject; item: EquipmentItem }[] }[],
@@ -72,40 +76,11 @@ export function validateLayout(
 ): LayoutIssue[] {
   const issues: LayoutIssue[] = [];
 
-  const resolved: Unit[] = units.map((u) => {
-    const bareShape = toShape(u.object, u.item);
-    const center = { x: u.object.x, y: u.object.y };
-
-    // Child chairs store (x, y, rotation) RELATIVE to their parent table's
-    // own local origin (see lib/geometry/placement.ts) — that's what lets
-    // Konva's Group transform move/rotate them together with the table for
-    // free. Convert each child into absolute room coordinates (applying the
-    // parent's own rotation) before measuring its distance from the unit
-    // center, or this wildly overestimates the footprint.
-    const parentRotRad = (u.object.rotation * Math.PI) / 180;
-    const cos = Math.cos(parentRotRad);
-    const sin = Math.sin(parentRotRad);
-    const childShapes = (u.children ?? []).map((c) => {
-      const absoluteChild: LayoutObject = {
-        ...c.object,
-        x: u.object.x + c.object.x * cos - c.object.y * sin,
-        y: u.object.y + c.object.x * sin + c.object.y * cos,
-        rotation: c.object.rotation + u.object.rotation,
-      };
-      return toShape(absoluteChild, c.item);
-    });
-    const footprintRadius = Math.max(
-      farthestPointDistance(bareShape, center),
-      ...childShapes.map((s) => farthestPointDistance(s, center)),
-      0
-    );
-    return {
-      object: u.object,
-      item: u.item,
-      bareShape,
-      footprint: { kind: "circle", cx: center.x, cy: center.y, radius: footprintRadius + u.item.clearanceIn },
-    };
-  });
+  const resolved: Unit[] = units.map((u) => ({
+    object: u.object,
+    item: u.item,
+    bareShape: toShape(u.object, u.item),
+  }));
 
   for (let i = 0; i < resolved.length; i++) {
     const a = resolved[i];
@@ -141,17 +116,6 @@ export function validateLayout(
           type: "collision",
           severity: "error",
           description: `${a.item.name} overlaps ${b.item.name}.`,
-          objectIds: [a.object.id, b.object.id],
-        });
-        continue; // a hard collision supersedes a clearance warning for this pair
-      }
-
-      if (circleVsCircle(a.footprint, b.footprint)) {
-        issues.push({
-          id: `clearance-${a.object.id}-${b.object.id}`,
-          type: "clearance_conflict",
-          severity: "warning",
-          description: `${a.item.name} is too close to ${b.item.name} — chairs or aisle clearance may overlap.`,
           objectIds: [a.object.id, b.object.id],
         });
       }

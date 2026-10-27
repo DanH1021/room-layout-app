@@ -34,8 +34,12 @@ export interface PdfLayoutData {
 const PAGE_WIDTH = 17 * 72;
 const PAGE_HEIGHT = 11 * 72;
 const MARGIN = 36; // 0.5in
-const SIDEBAR_WIDTH = 216; // 3in, for the legend/title block
 const TITLE_HEIGHT = 54;
+// The bottom 2in of the printable page is reserved for the legend, seat
+// totals, scale bar, and setup notes — the room drawing fills the full
+// width above it, rather than sharing the page with a right-hand sidebar.
+const BOTTOM_BAND_HEIGHT = 2 * 72;
+const BAND_GUTTER = 10; // gap between the room drawing and the band's top rule
 
 function hexToRgb(hex: string): RGB {
   const clean = hex.replace("#", "");
@@ -62,8 +66,12 @@ export async function renderLayoutPdf(data: PdfLayoutData): Promise<Uint8Array> 
   const roomWidthIn = data.room.widthFt * 12;
   const roomLengthIn = data.room.lengthFt * 12;
 
-  const drawAreaWidthPt = PAGE_WIDTH - MARGIN * 2 - SIDEBAR_WIDTH - 18; // 18pt gutter before sidebar
-  const drawAreaHeightPt = PAGE_HEIGHT - MARGIN * 2 - TITLE_HEIGHT;
+  const bandTop = MARGIN + BOTTOM_BAND_HEIGHT;
+
+  // The room drawing now fills the full printable width — no right-hand
+  // sidebar — and the full height between the title and the bottom band.
+  const drawAreaWidthPt = PAGE_WIDTH - MARGIN * 2;
+  const drawAreaHeightPt = PAGE_HEIGHT - MARGIN - TITLE_HEIGHT - bandTop - BAND_GUTTER;
 
   const scalePtPerIn = Math.min(drawAreaWidthPt / roomWidthIn, drawAreaHeightPt / roomLengthIn);
 
@@ -83,8 +91,7 @@ export async function renderLayoutPdf(data: PdfLayoutData): Promise<Uint8Array> 
   await drawBackgroundImage(pdfDoc, page, data.room, toPagePoint);
   drawRoomBoundary(page, data.room, toPagePoint);
   drawEquipment(page, font, data.equipment, data.objects, toPagePoint, scalePtPerIn);
-  drawScaleBar(page, font, fontBold, originX, MARGIN, scalePtPerIn);
-  drawLegend(page, font, fontBold, data);
+  drawBottomBand(page, font, fontBold, data, bandTop);
 
   return pdfDoc.save();
 }
@@ -139,18 +146,16 @@ async function drawBackgroundImage(
 
 function drawTitleBlock(page: PDFPage, font: PDFFont, fontBold: PDFFont, data: PdfLayoutData) {
   const top = PAGE_HEIGHT - MARGIN;
-  page.drawText(`${data.room.venueName} — ${data.room.roomName}`, {
+  // Just the room name — no venue name or total dimensions; those weren't
+  // useful on the printed sheet per Dan's feedback.
+  page.drawText(data.room.roomName, {
     x: MARGIN,
     y: top - 16,
     size: 16,
     font: fontBold,
     color: rgb(0.1, 0.1, 0.1),
   });
-  const subtitleParts = [
-    data.layoutName,
-    data.eventName,
-    `${data.room.widthFt}' × ${data.room.lengthFt}'`,
-  ].filter(Boolean);
+  const subtitleParts = [data.layoutName, data.eventName].filter(Boolean);
   page.drawText(subtitleParts.join("   •   "), {
     x: MARGIN,
     y: top - 33,
@@ -409,100 +414,169 @@ function pathFlippedForPdfLib(points: { x: number; y: number }[]): string {
   return `M ${points.map((p) => `${p.x.toFixed(2)},${-p.y.toFixed(2)}`).join(" L ")} Z`;
 }
 
-function drawScaleBar(
+/**
+ * Everything that used to live in a 3in right-hand sidebar now lives in a
+ * 2in band across the bottom of the page instead, per Dan's request, so the
+ * room drawing above it gets the full page width. Laid out as three
+ * columns — legend, scale/seat totals, setup notes — left to right.
+ */
+function drawBottomBand(page: PDFPage, font: PDFFont, fontBold: PDFFont, data: PdfLayoutData, bandTop: number) {
+  const bandBottom = MARGIN;
+  const bandLeft = MARGIN;
+  const bandRight = PAGE_WIDTH - MARGIN;
+  const colGap = 24;
+  const legendColWidth = 380;
+  const totalsColWidth = 220;
+  const legendX = bandLeft;
+  const totalsX = legendX + legendColWidth + colGap;
+  const notesX = totalsX + totalsColWidth + colGap;
+  const notesWidth = bandRight - notesX;
+
+  page.drawLine({
+    start: { x: bandLeft, y: bandTop },
+    end: { x: bandRight, y: bandTop },
+    thickness: 0.75,
+    color: rgb(0.7, 0.7, 0.7),
+  });
+  for (const sepX of [totalsX - colGap / 2, notesX - colGap / 2]) {
+    page.drawLine({
+      start: { x: sepX, y: bandTop - 4 },
+      end: { x: sepX, y: bandBottom + 4 },
+      thickness: 0.5,
+      color: rgb(0.85, 0.85, 0.85),
+    });
+  }
+
+  const equipmentById = new Map(data.equipment.map((e) => [e.id, e]));
+  const totalSeats = computeCapacity(data.objects, (id) => {
+    const item = equipmentById.get(id);
+    if (!item) throw new Error(`Unknown equipment id: ${id}`);
+    return item;
+  });
+
+  drawLegendColumn(page, font, fontBold, data, equipmentById, legendX, bandTop, legendColWidth, bandBottom);
+  drawTotalsColumn(page, font, fontBold, data, totalSeats, totalsX, bandTop, totalsColWidth, bandBottom);
+  drawNotesColumn(page, font, fontBold, data, notesX, bandTop, notesWidth, bandBottom);
+}
+
+/** Equipment swatches + counts, flowing into a second sub-column if the single column runs out of band height. */
+function drawLegendColumn(
   page: PDFPage,
   font: PDFFont,
   fontBold: PDFFont,
-  originX: number,
-  bottomMargin: number,
-  scalePtPerIn: number
+  data: PdfLayoutData,
+  equipmentById: Map<string, EquipmentItem>,
+  x: number,
+  bandTop: number,
+  width: number,
+  bandBottom: number
 ) {
-  const barFeet = 10;
-  const barLengthPt = barFeet * 12 * scalePtPerIn;
-  const y = bottomMargin + 10;
-  const x0 = originX;
-  const x1 = x0 + barLengthPt;
+  page.drawText("Legend", { x, y: bandTop - 14, size: 10, font: fontBold, color: rgb(0.1, 0.1, 0.1) });
 
-  page.drawLine({ start: { x: x0, y }, end: { x: x1, y }, thickness: 1.5, color: rgb(0.1, 0.1, 0.1) });
-  for (let ft = 0; ft <= barFeet; ft += ft === 0 || ft === barFeet ? barFeet : 5) {
-    const tickX = x0 + ft * 12 * scalePtPerIn;
-    page.drawLine({
-      start: { x: tickX, y: y - 4 },
-      end: { x: tickX, y: y + 4 },
-      thickness: 1.5,
-      color: rgb(0.1, 0.1, 0.1),
-    });
-  }
-  page.drawText("0", { x: x0 - 2, y: y + 6, size: 7, font, color: rgb(0.2, 0.2, 0.2) });
-  page.drawText(`${barFeet} ft`, { x: x1 - 8, y: y + 6, size: 7, font, color: rgb(0.2, 0.2, 0.2) });
-
-  const realFeetPerPaperInch = 72 / scalePtPerIn / 12;
-  page.drawText(`Scale: 1 in ~ ${realFeetPerPaperInch.toFixed(1)} ft (verify against bar above when printed)`, {
-    x: x0,
-    y: bottomMargin - 6,
-    size: 7,
-    font: fontBold,
-    color: rgb(0.35, 0.35, 0.35),
-  });
-}
-
-function drawLegend(page: PDFPage, font: PDFFont, fontBold: PDFFont, data: PdfLayoutData) {
-  const x = PAGE_WIDTH - MARGIN - SIDEBAR_WIDTH;
-  let y = PAGE_HEIGHT - MARGIN - TITLE_HEIGHT;
-
-  page.drawText("Legend", { x, y, size: 11, font: fontBold, color: rgb(0.1, 0.1, 0.1) });
-  y -= 16;
-
-  const equipmentById = new Map(data.equipment.map((e) => [e.id, e]));
   const parents = data.objects.filter((o) => !o.parentObjectId);
   const countByEquipment = new Map<string, number>();
   for (const p of parents) {
     if (!p.equipmentItemId) continue; // text labels aren't equipment
     countByEquipment.set(p.equipmentItemId, (countByEquipment.get(p.equipmentItemId) ?? 0) + 1);
   }
-
-  for (const [equipmentId, count] of countByEquipment.entries()) {
+  const entries = [...countByEquipment.entries()].filter(([equipmentId]) => {
     const item = equipmentById.get(equipmentId);
-    if (!item || item.category === "chair") continue; // chairs are summarized as total seats below
-    const swatchColor = hexToRgb(item.color);
-    page.drawRectangle({ x, y: y - 8, width: 10, height: 10, color: swatchColor, borderColor: rgb(0.2, 0.2, 0.2), borderWidth: 0.5 });
-    page.drawText(`${item.name}  ×${count}`, { x: x + 16, y: y - 6, size: 9, font, color: rgb(0.2, 0.2, 0.2) });
-    y -= 16;
-  }
-
-  y -= 8;
-  const totalSeats = computeCapacity(data.objects, (id) => {
-    const item = equipmentById.get(id);
-    if (!item) throw new Error(`Unknown equipment id: ${id}`);
-    return item;
+    return item && item.category !== "chair"; // chairs are summarized as total seats instead
   });
-  page.drawText(`Total seats: ${totalSeats}`, { x, y, size: 10, font: fontBold, color: rgb(0.1, 0.1, 0.1) });
-  y -= 14;
+
+  const rowHeight = 14;
+  const rowsAvailable = Math.max(1, Math.floor((bandTop - 28 - bandBottom) / rowHeight));
+  const subColWidth = width / 2 - 6;
+
+  entries.forEach(([equipmentId, count], i) => {
+    const item = equipmentById.get(equipmentId);
+    if (!item) return;
+    const col = Math.floor(i / rowsAvailable);
+    const row = i % rowsAvailable;
+    if (col > 1) return; // out of band space — rest are omitted rather than drawn off-page
+    const colX = x + col * (subColWidth + 12);
+    const y = bandTop - 28 - row * rowHeight;
+    page.drawRectangle({
+      x: colX,
+      y: y - 7,
+      width: 9,
+      height: 9,
+      color: hexToRgb(item.color),
+      borderColor: rgb(0.2, 0.2, 0.2),
+      borderWidth: 0.5,
+    });
+    page.drawText(`${item.name}  ×${count}`, { x: colX + 14, y: y - 5, size: 8, font, color: rgb(0.2, 0.2, 0.2) });
+  });
+}
+
+/** Total seats, guest-target comparison, and the printed scale bar. */
+function drawTotalsColumn(
+  page: PDFPage,
+  font: PDFFont,
+  fontBold: PDFFont,
+  data: PdfLayoutData,
+  totalSeats: number,
+  x: number,
+  bandTop: number,
+  width: number,
+  bandBottom: number
+) {
+  let y = bandTop - 14;
+  page.drawText(`Total seats: ${totalSeats}`, { x, y, size: 11, font: fontBold, color: rgb(0.1, 0.1, 0.1) });
+  y -= 16;
   if (data.guestCountTarget) {
     const diff = totalSeats - data.guestCountTarget;
     const diffLabel = diff === 0 ? "matches target" : diff > 0 ? `${diff} over target` : `${-diff} under target`;
-    page.drawText(`Guest target: ${data.guestCountTarget} (${diffLabel})`, {
-      x,
-      y,
-      size: 9,
-      font,
-      color: rgb(0.35, 0.35, 0.35),
-    });
-    y -= 14;
+    for (const line of wrapText(`Guest target: ${data.guestCountTarget} (${diffLabel})`, font, 9, width)) {
+      page.drawText(line, { x, y, size: 9, font, color: rgb(0.35, 0.35, 0.35) });
+      y -= 12;
+    }
   }
+  drawScaleBar(page, font, fontBold, x, Math.max(y - 14, bandBottom + 24), width);
+}
 
-  if (data.setupNotes && data.setupNotes.trim()) {
-    y -= 10;
-    page.drawText("Setup Notes", { x, y, size: 11, font: fontBold, color: rgb(0.1, 0.1, 0.1) });
-    y -= 14;
-    const maxWidth = SIDEBAR_WIDTH;
-    const fontSize = 9;
-    for (const paragraph of data.setupNotes.split("\n")) {
-      for (const line of wrapText(paragraph, font, fontSize, maxWidth)) {
-        if (y < MARGIN + 10) break; // ran out of sidebar room — avoid drawing off the page
-        page.drawText(line, { x, y, size: fontSize, font, color: rgb(0.25, 0.25, 0.25) });
-        y -= 12;
-      }
+function drawScaleBar(page: PDFPage, font: PDFFont, fontBold: PDFFont, x0: number, y: number, maxWidth: number) {
+  // Recomputed from the page's own stored metadata would be ideal, but the
+  // scale bar only needs to be internally consistent with itself — drawn
+  // at a fixed real-world length, it's a ruler regardless of room scale.
+  const barFeet = 10;
+  const barLengthPt = Math.min(maxWidth, 90);
+  const x1 = x0 + barLengthPt;
+
+  page.drawLine({ start: { x: x0, y }, end: { x: x1, y }, thickness: 1.5, color: rgb(0.1, 0.1, 0.1) });
+  page.drawLine({ start: { x: x0, y: y - 4 }, end: { x: x0, y: y + 4 }, thickness: 1.5, color: rgb(0.1, 0.1, 0.1) });
+  page.drawLine({ start: { x: x1, y: y - 4 }, end: { x: x1, y: y + 4 }, thickness: 1.5, color: rgb(0.1, 0.1, 0.1) });
+  page.drawText("0", { x: x0 - 2, y: y + 6, size: 7, font, color: rgb(0.2, 0.2, 0.2) });
+  page.drawText(`${barFeet} ft`, { x: x1 - 8, y: y + 6, size: 7, font, color: rgb(0.2, 0.2, 0.2) });
+  page.drawText("Verify scale with a ruler against this bar before printing to a different page size.", {
+    x: x0,
+    y: y - 14,
+    size: 6.5,
+    font: fontBold,
+    color: rgb(0.35, 0.35, 0.35),
+  });
+}
+
+function drawNotesColumn(
+  page: PDFPage,
+  font: PDFFont,
+  fontBold: PDFFont,
+  data: PdfLayoutData,
+  x: number,
+  bandTop: number,
+  width: number,
+  bandBottom: number
+) {
+  if (!data.setupNotes || !data.setupNotes.trim()) return;
+  let y = bandTop - 14;
+  page.drawText("Setup Notes", { x, y, size: 10, font: fontBold, color: rgb(0.1, 0.1, 0.1) });
+  y -= 14;
+  const fontSize = 9;
+  for (const paragraph of data.setupNotes.split("\n")) {
+    for (const line of wrapText(paragraph, font, fontSize, width)) {
+      if (y < bandBottom + 8) return; // ran out of band room — avoid drawing off the page
+      page.drawText(line, { x, y, size: fontSize, font, color: rgb(0.25, 0.25, 0.25) });
+      y -= 12;
     }
   }
 }

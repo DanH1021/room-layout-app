@@ -87,7 +87,10 @@ describe("validateLayout", () => {
     expect(issues.some((i) => i.type === "room_boundary")).toBe(true);
   });
 
-  it("flags a clearance warning when two tables' chair footprints overlap even though the bare tables don't", () => {
+  it("does not flag a clearance warning when two tables' chairs are close but the bare tables don't overlap", () => {
+    // Clearance/"too close for guest access" warnings were removed per
+    // Dan's request — sales staff intentionally pack tables tighter than
+    // the clearance allowance in real layouts, so this used to be noise.
     // Chair coordinates are RELATIVE to their parent table's center (see
     // lib/geometry/placement.ts), which is what lets Konva's Group
     // transform move/rotate them together with the table for free — so a
@@ -103,8 +106,7 @@ describe("validateLayout", () => {
       { object: t2, item: roundTableItem, children: [{ object: c2, item: chairItem }] },
     ];
     const issues = validateLayout(units, roomBoundary);
-    expect(issues.some((i) => i.type === "clearance_conflict")).toBe(true);
-    expect(issues.every((i) => i.type !== "collision")).toBe(true);
+    expect(issues).toHaveLength(0);
   });
 });
 

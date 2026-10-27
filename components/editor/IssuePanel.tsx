@@ -26,7 +26,7 @@ export function IssuePanel({ issues, onFocusIssue }: IssuePanelProps) {
         {errorCount > 0 && <span className="text-red-600">{errorCount} error{errorCount !== 1 ? "s" : ""}</span>}
         {warningCount > 0 && (
           <span className="text-amber-600">
-            {warningCount} clearance warning{warningCount !== 1 ? "s" : ""}
+            {warningCount} warning{warningCount !== 1 ? "s" : ""}
           </span>
         )}
       </div>

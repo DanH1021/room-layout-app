@@ -537,6 +537,19 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
             const pt = pointerToRoomInches(stage);
             if (pt) setMeasureLive(pt);
           }}
+          onWheel={(e) => {
+            // Trackpad/mouse-wheel panning — scroll instead of having to
+            // click-drag empty canvas space to move around a large room.
+            // Stage position is uncontrolled (no x/y prop), same as the
+            // existing click-drag panning, so this just nudges Konva's own
+            // internal position directly.
+            e.evt.preventDefault();
+            const stage = e.target.getStage();
+            if (!stage) return;
+            stage.x(stage.x() - e.evt.deltaX);
+            stage.y(stage.y() - e.evt.deltaY);
+            stage.batchDraw();
+          }}
         >
           {bgVisible && (
             <Layer x={stageOffset.x} y={stageOffset.y}>

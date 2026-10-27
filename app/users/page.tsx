@@ -22,6 +22,9 @@ export default function UsersPage() {
   const [role, setRole] = useState<(typeof ROLES)[number]>("salesperson");
   const [submitting, setSubmitting] = useState(false);
   const [justCreated, setJustCreated] = useState<{ email: string; tempPassword: string } | null>(null);
+  const [justReset, setJustReset] = useState<{ email: string; tempPassword: string } | null>(null);
+  const [resettingId, setResettingId] = useState<string | null>(null);
+  const [resetError, setResetError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/users");
@@ -66,6 +69,29 @@ export default function UsersPage() {
       setError(err instanceof Error ? err.message : "Couldn't create user");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleResetPassword(user: UserRow) {
+    if (!window.confirm(`Reset ${user.name}'s password? Their current password will stop working immediately.`)) {
+      return;
+    }
+    setResettingId(user.id);
+    setResetError(null);
+    setJustReset(null);
+    try {
+      const res = await fetch(`/api/users/${user.id}/reset-password`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ? JSON.stringify(body.error) : `Reset failed (${res.status})`);
+      }
+      const data = await res.json();
+      setJustReset({ email: data.email, tempPassword: data.tempPassword });
+    } catch (err) {
+      console.error(err);
+      setResetError(err instanceof Error ? err.message : "Couldn't reset password");
+    } finally {
+      setResettingId(null);
     }
   }
 
@@ -148,6 +174,13 @@ export default function UsersPage() {
 
         <div>
           <h1 className="text-lg font-semibold text-neutral-800 mb-3">Users</h1>
+          {justReset && (
+            <div className="mb-3 bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-3 text-sm text-emerald-900">
+              Reset <strong>{justReset.email}</strong>. New temporary password (shown once):{" "}
+              <code className="bg-white border border-emerald-300 rounded px-1.5 py-0.5">{justReset.tempPassword}</code>
+            </div>
+          )}
+          {resetError && <p className="text-sm text-red-600 mb-3">{resetError}</p>}
           {users === null ? (
             <p className="text-sm text-neutral-500">Loading…</p>
           ) : (
@@ -158,9 +191,18 @@ export default function UsersPage() {
                     <div className="text-sm font-medium text-neutral-800">{u.name}</div>
                     <div className="text-xs text-neutral-500">{u.email}</div>
                   </div>
-                  <span className="text-xs capitalize px-2 py-0.5 rounded-full bg-neutral-100 border border-neutral-200 text-neutral-600">
-                    {u.role.replace("_", " ")}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs capitalize px-2 py-0.5 rounded-full bg-neutral-100 border border-neutral-200 text-neutral-600">
+                      {u.role.replace("_", " ")}
+                    </span>
+                    <button
+                      onClick={() => handleResetPassword(u)}
+                      disabled={resettingId === u.id}
+                      className="text-xs px-2.5 py-1 rounded-md border border-neutral-300 bg-white text-neutral-700 hover:border-neutral-500 hover:bg-neutral-100 disabled:opacity-50 transition-colors"
+                    >
+                      {resettingId === u.id ? "Resetting…" : "Reset password"}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

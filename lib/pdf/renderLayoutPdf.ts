@@ -29,9 +29,12 @@ export interface PdfLayoutData {
   generatedAtLabel: string;
 }
 
-// Tabloid landscape (17in x 11in), in points (72pt = 1in) — big enough that a
-// 60ft x 40ft ballroom still renders at a legible scale.
-const PAGE_WIDTH = 17 * 72;
+// US Letter portrait (8.5in x 11in), in points (72pt = 1in) — prints
+// correctly on a normal printer/paper tray without rotation, per Dan's
+// request (this used to default to tabloid landscape). Everything below —
+// the room drawing, legend, totals, and setup notes — fits on this one
+// page; there is no second page.
+const PAGE_WIDTH = 8.5 * 72;
 const PAGE_HEIGHT = 11 * 72;
 const MARGIN = 36; // 0.5in
 const TITLE_HEIGHT = 54;
@@ -40,6 +43,10 @@ const TITLE_HEIGHT = 54;
 // width above it, rather than sharing the page with a right-hand sidebar.
 const BOTTOM_BAND_HEIGHT = 2 * 72;
 const BAND_GUTTER = 10; // gap between the room drawing and the band's top rule
+// In the narrower portrait width, the legend (which can run to several
+// rows of equipment types) gets its own full-width row across the top of
+// the band; totals/scale and setup notes split the row underneath.
+const LEGEND_ROW_HEIGHT = 58;
 
 function hexToRgb(hex: string): RGB {
   const clean = hex.replace("#", "");
@@ -91,7 +98,7 @@ export async function renderLayoutPdf(data: PdfLayoutData): Promise<Uint8Array> 
   await drawBackgroundImage(pdfDoc, page, data.room, toPagePoint);
   drawRoomBoundary(page, data.room, toPagePoint);
   drawEquipment(page, font, data.equipment, data.objects, toPagePoint, scalePtPerIn);
-  drawBottomBand(page, font, fontBold, data, bandTop);
+  drawBottomBand(page, font, fontBold, data, bandTop, scalePtPerIn);
 
   return pdfDoc.save();
 }
@@ -417,18 +424,26 @@ function pathFlippedForPdfLib(points: { x: number; y: number }[]): string {
 /**
  * Everything that used to live in a 3in right-hand sidebar now lives in a
  * 2in band across the bottom of the page instead, per Dan's request, so the
- * room drawing above it gets the full page width. Laid out as three
- * columns — legend, scale/seat totals, setup notes — left to right.
+ * room drawing above it gets the full page width. On the narrower portrait
+ * page, the legend gets its own full-width row across the top of the band
+ * (it can run to several rows of equipment types), with scale/seat totals
+ * and setup notes splitting the row underneath, left and right.
  */
-function drawBottomBand(page: PDFPage, font: PDFFont, fontBold: PDFFont, data: PdfLayoutData, bandTop: number) {
+function drawBottomBand(
+  page: PDFPage,
+  font: PDFFont,
+  fontBold: PDFFont,
+  data: PdfLayoutData,
+  bandTop: number,
+  scalePtPerIn: number
+) {
   const bandBottom = MARGIN;
   const bandLeft = MARGIN;
   const bandRight = PAGE_WIDTH - MARGIN;
-  const colGap = 24;
-  const legendColWidth = 380;
-  const totalsColWidth = 220;
-  const legendX = bandLeft;
-  const totalsX = legendX + legendColWidth + colGap;
+  const colGap = 20;
+  const legendRowBottom = bandTop - LEGEND_ROW_HEIGHT;
+  const totalsColWidth = 170;
+  const totalsX = bandLeft;
   const notesX = totalsX + totalsColWidth + colGap;
   const notesWidth = bandRight - notesX;
 
@@ -438,14 +453,19 @@ function drawBottomBand(page: PDFPage, font: PDFFont, fontBold: PDFFont, data: P
     thickness: 0.75,
     color: rgb(0.7, 0.7, 0.7),
   });
-  for (const sepX of [totalsX - colGap / 2, notesX - colGap / 2]) {
-    page.drawLine({
-      start: { x: sepX, y: bandTop - 4 },
-      end: { x: sepX, y: bandBottom + 4 },
-      thickness: 0.5,
-      color: rgb(0.85, 0.85, 0.85),
-    });
-  }
+  page.drawLine({
+    start: { x: bandLeft, y: legendRowBottom },
+    end: { x: bandRight, y: legendRowBottom },
+    thickness: 0.5,
+    color: rgb(0.85, 0.85, 0.85),
+  });
+  const sepX = notesX - colGap / 2;
+  page.drawLine({
+    start: { x: sepX, y: legendRowBottom - 4 },
+    end: { x: sepX, y: bandBottom + 4 },
+    thickness: 0.5,
+    color: rgb(0.85, 0.85, 0.85),
+  });
 
   const equipmentById = new Map(data.equipment.map((e) => [e.id, e]));
   const totalSeats = computeCapacity(data.objects, (id) => {
@@ -454,24 +474,35 @@ function drawBottomBand(page: PDFPage, font: PDFFont, fontBold: PDFFont, data: P
     return item;
   });
 
-  drawLegendColumn(page, font, fontBold, data, equipmentById, legendX, bandTop, legendColWidth, bandBottom);
-  drawTotalsColumn(page, font, fontBold, data, totalSeats, totalsX, bandTop, totalsColWidth, bandBottom);
-  drawNotesColumn(page, font, fontBold, data, notesX, bandTop, notesWidth, bandBottom);
+  drawLegendRow(page, font, fontBold, data, equipmentById, bandLeft, bandTop, bandRight - bandLeft, legendRowBottom);
+  drawTotalsColumn(
+    page,
+    font,
+    fontBold,
+    data,
+    totalSeats,
+    totalsX,
+    legendRowBottom,
+    totalsColWidth,
+    bandBottom,
+    scalePtPerIn
+  );
+  drawNotesColumn(page, font, fontBold, data, notesX, legendRowBottom, notesWidth, bandBottom);
 }
 
-/** Equipment swatches + counts, flowing into a second sub-column if the single column runs out of band height. */
-function drawLegendColumn(
+/** Equipment swatches + counts, flowing left-to-right then wrapping into as many sub-columns as fit the row's full width. */
+function drawLegendRow(
   page: PDFPage,
   font: PDFFont,
   fontBold: PDFFont,
   data: PdfLayoutData,
   equipmentById: Map<string, EquipmentItem>,
   x: number,
-  bandTop: number,
+  rowTop: number,
   width: number,
-  bandBottom: number
+  rowBottom: number
 ) {
-  page.drawText("Legend", { x, y: bandTop - 14, size: 10, font: fontBold, color: rgb(0.1, 0.1, 0.1) });
+  page.drawText("Legend", { x, y: rowTop - 14, size: 10, font: fontBold, color: rgb(0.1, 0.1, 0.1) });
 
   const parents = data.objects.filter((o) => !o.parentObjectId);
   const countByEquipment = new Map<string, number>();
@@ -484,18 +515,20 @@ function drawLegendColumn(
     return item && item.category !== "chair"; // chairs are summarized as total seats instead
   });
 
-  const rowHeight = 14;
-  const rowsAvailable = Math.max(1, Math.floor((bandTop - 28 - bandBottom) / rowHeight));
-  const subColWidth = width / 2 - 6;
+  const rowHeight = 13;
+  const minSubColWidth = 150;
+  const numCols = Math.max(1, Math.floor(width / minSubColWidth));
+  const subColWidth = width / numCols - 10;
+  const rowsAvailable = Math.max(1, Math.floor((rowTop - 28 - rowBottom) / rowHeight));
 
   entries.forEach(([equipmentId, count], i) => {
     const item = equipmentById.get(equipmentId);
     if (!item) return;
     const col = Math.floor(i / rowsAvailable);
     const row = i % rowsAvailable;
-    if (col > 1) return; // out of band space — rest are omitted rather than drawn off-page
-    const colX = x + col * (subColWidth + 12);
-    const y = bandTop - 28 - row * rowHeight;
+    if (col >= numCols) return; // out of band space — rest are omitted rather than drawn off-page
+    const colX = x + col * (subColWidth + 10);
+    const y = rowTop - 28 - row * rowHeight;
     page.drawRectangle({
       x: colX,
       y: y - 7,
@@ -519,7 +552,8 @@ function drawTotalsColumn(
   x: number,
   bandTop: number,
   width: number,
-  bandBottom: number
+  bandBottom: number,
+  scalePtPerIn: number
 ) {
   let y = bandTop - 14;
   page.drawText(`Total seats: ${totalSeats}`, { x, y, size: 11, font: fontBold, color: rgb(0.1, 0.1, 0.1) });
@@ -532,15 +566,25 @@ function drawTotalsColumn(
       y -= 12;
     }
   }
-  drawScaleBar(page, font, fontBold, x, Math.max(y - 14, bandBottom + 24), width);
+  drawScaleBar(page, font, fontBold, x, Math.max(y - 14, bandBottom + 24), width, scalePtPerIn);
 }
 
-function drawScaleBar(page: PDFPage, font: PDFFont, fontBold: PDFFont, x0: number, y: number, maxWidth: number) {
-  // Recomputed from the page's own stored metadata would be ideal, but the
-  // scale bar only needs to be internally consistent with itself — drawn
-  // at a fixed real-world length, it's a ruler regardless of room scale.
-  const barFeet = 10;
-  const barLengthPt = Math.min(maxWidth, 90);
+function drawScaleBar(
+  page: PDFPage,
+  font: PDFFont,
+  fontBold: PDFFont,
+  x0: number,
+  y: number,
+  maxWidth: number,
+  scalePtPerIn: number
+) {
+  // Drawn at the SAME scale as the room above it (not a fixed pixel length)
+  // so a ruler held against the printed bar gives a real distance — that's
+  // the whole point of a scale bar. Pick the largest "nice" round number of
+  // feet (10, 5, or 2) that still fits the available column width.
+  const candidateFeet = [10, 5, 2];
+  const barFeet = candidateFeet.find((ft) => ft * 12 * scalePtPerIn <= maxWidth) ?? candidateFeet[candidateFeet.length - 1];
+  const barLengthPt = barFeet * 12 * scalePtPerIn;
   const x1 = x0 + barLengthPt;
 
   page.drawLine({ start: { x: x0, y }, end: { x: x1, y }, thickness: 1.5, color: rgb(0.1, 0.1, 0.1) });

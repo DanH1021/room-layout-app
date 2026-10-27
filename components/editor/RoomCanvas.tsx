@@ -92,6 +92,17 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
     distanceIn: number;
   } | null>(null);
 
+  // Row-placement tool: lay out N instances of one equipment type in a line,
+  // spaced by an exact edge-to-edge gap (e.g. 56" between 72" rounds) rather
+  // than placing and nudging each one individually. Chairs are still
+  // auto-generated per table exactly like a normal single placement — the
+  // gap is purely between the bare table shapes, per Dan's own spec.
+  const [rowEquipmentId, setRowEquipmentId] = useState<string | null>(null);
+  const [rowCount, setRowCount] = useState(3);
+  const [rowGapIn, setRowGapIn] = useState(56);
+  const [rowDirection, setRowDirection] = useState<"horizontal" | "vertical">("horizontal");
+  const [armedRow, setArmedRow] = useState(false);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const groupRefs = useRef<Record<string, Konva.Group>>({});
   const transformerRef = useRef<Konva.Transformer>(null);
@@ -206,6 +217,9 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
       } else if (e.key === "Escape" && armedEquipmentId) {
         e.preventDefault();
         setArmedEquipmentId(null);
+      } else if (e.key === "Escape" && armedRow) {
+        e.preventDefault();
+        setArmedRow(false);
       } else if (e.key === "Escape" && measureMode) {
         e.preventDefault();
         if (measureStart) {
@@ -219,12 +233,15 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedIds, objects, saveLayout, armedEquipmentId, readOnly, measureMode, measureStart]);
+  }, [selectedIds, objects, saveLayout, armedEquipmentId, readOnly, measureMode, measureStart, armedRow]);
 
   function toggleMeasureMode() {
     setMeasureMode((prev) => {
       const next = !prev;
-      if (next) setArmedEquipmentId(null); // mutually exclusive with placing equipment
+      if (next) {
+        setArmedEquipmentId(null); // mutually exclusive with placing equipment
+        setArmedRow(false); // and with row placement
+      }
       setMeasureStart(null);
       setMeasureLive(null);
       setMeasureCompleted(null);
@@ -321,6 +338,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   // switches the armed type.
   function armEquipment(equipmentItemId: string) {
     if (readOnly) return;
+    setArmedRow(false); // mutually exclusive with row placement
     setArmedEquipmentId((prev) => (prev === equipmentItemId ? null : equipmentItemId));
   }
 
@@ -333,6 +351,49 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
     const newObjects = instantiateEquipment(armedEquipmentId, centerX, centerY, getEquipmentItem);
     setObjects((prev) => [...prev, ...newObjects]);
     setSelectedIds(new Set([newObjects[0].id]));
+  }
+
+  function toggleArmedRow() {
+    if (readOnly || !rowEquipmentId) return;
+    setArmedEquipmentId(null); // mutually exclusive with single-item placement
+    setArmedRow((prev) => !prev);
+  }
+
+  /**
+   * Places `rowCount` instances of `rowEquipmentId` in a straight line,
+   * centered on the clicked point, each table's bare shape exactly
+   * `rowGapIn` inches from its neighbor's (center-to-center spacing =
+   * along-axis table size + gap — never the broader chair/clearance
+   * footprint used elsewhere, per Dan's spec: the gap is between table
+   * edges, chairs are expected to sit in that space). Only the row's own
+   * anchor point snaps to the grid; individual tables are NOT additionally
+   * snapped, so the requested gap stays exact rather than getting rounded
+   * off by the grid step.
+   */
+  function placeRowAt(xIn: number, yIn: number) {
+    if (!armedRow || !rowEquipmentId || readOnly) return;
+    const item = getEquipmentItem(rowEquipmentId);
+    const alongAxisIn =
+      item.shape === "circle"
+        ? item.diameterIn ?? 24
+        : rowDirection === "horizontal"
+          ? item.widthIn ?? 24
+          : item.lengthIn ?? 24;
+    const step = alongAxisIn + rowGapIn;
+    const totalSpan = step * (rowCount - 1);
+    const anchorX = snap(xIn);
+    const anchorY = snap(yIn);
+    const startX = rowDirection === "horizontal" ? anchorX - totalSpan / 2 : anchorX;
+    const startY = rowDirection === "vertical" ? anchorY - totalSpan / 2 : anchorY;
+
+    const newObjects: LayoutObject[] = [];
+    for (let i = 0; i < rowCount; i++) {
+      const cx = rowDirection === "horizontal" ? startX + step * i : startX;
+      const cy = rowDirection === "vertical" ? startY + step * i : startY;
+      newObjects.push(...instantiateEquipment(rowEquipmentId, cx, cy, getEquipmentItem));
+    }
+    setObjects((prev) => [...prev, ...newObjects]);
+    setSelectedIds(new Set(newObjects.filter((o) => !o.parentObjectId).map((o) => o.id)));
   }
 
   function updateObject(id: string, changes: Partial<LayoutObject>) {
@@ -437,6 +498,16 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
             ? `${inchesToFeetLabel(measureCompleted.distanceIn)} (${Math.round(measureCompleted.distanceIn)}")`
             : null
         }
+        rowEquipmentId={rowEquipmentId}
+        onRowEquipmentChange={setRowEquipmentId}
+        rowCount={rowCount}
+        onRowCountChange={setRowCount}
+        rowGapIn={rowGapIn}
+        onRowGapChange={setRowGapIn}
+        rowDirection={rowDirection}
+        onRowDirectionChange={setRowDirection}
+        armedRow={armedRow}
+        onToggleArmedRow={toggleArmedRow}
       />
       <div ref={containerRef} className="flex-1 h-full bg-neutral-100 overflow-hidden relative">
         <div className="absolute top-2 left-2 z-10 bg-white/90 backdrop-blur px-3 py-1.5 rounded-md text-xs text-neutral-700 shadow-sm flex items-center gap-3">
@@ -484,6 +555,12 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
             Click to place: {getEquipmentItem(armedEquipmentId).name} — press Esc to cancel
           </div>
         )}
+        {armedRow && rowEquipmentId && (
+          <div className="absolute top-12 left-1/2 -translate-x-1/2 z-10 bg-blue-600 text-white text-xs px-3 py-1.5 rounded-full shadow-sm">
+            Click to place a row of {rowCount} × {getEquipmentItem(rowEquipmentId).name}, {rowGapIn}&quot;
+            apart — press Esc to cancel
+          </div>
+        )}
         {measureMode && (
           <div className="absolute top-12 left-1/2 -translate-x-1/2 z-10 bg-blue-600 text-white text-xs px-3 py-1.5 rounded-full shadow-sm">
             {measureStart ? "Click the second point — press Esc to cancel" : "Click a starting point — press Esc to stop measuring"}
@@ -493,7 +570,7 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
           width={containerSize.width}
           height={containerSize.height}
           draggable={!measureMode}
-          style={armedEquipmentId ? { cursor: "crosshair" } : measureMode ? { cursor: "crosshair" } : undefined}
+          style={armedEquipmentId || armedRow ? { cursor: "crosshair" } : measureMode ? { cursor: "crosshair" } : undefined}
           onClick={(e) => {
             if (e.target !== e.target.getStage()) return;
             const stage = e.target.getStage();
@@ -512,6 +589,11 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
                 setMeasureStart(pt);
                 setMeasureLive(pt);
               }
+              return;
+            }
+            if (armedRow && stage) {
+              const pt = pointerToRoomInches(stage);
+              if (pt) placeRowAt(pt.x, pt.y);
               return;
             }
             if (armedEquipmentId) {

@@ -29,6 +29,16 @@ interface ToolbarProps {
   measureMode: boolean;
   onToggleMeasure: () => void;
   measureResultLabel?: string | null;
+  rowEquipmentId: string | null;
+  onRowEquipmentChange: (id: string) => void;
+  rowCount: number;
+  onRowCountChange: (count: number) => void;
+  rowGapIn: number;
+  onRowGapChange: (gapIn: number) => void;
+  rowDirection: "horizontal" | "vertical";
+  onRowDirectionChange: (direction: "horizontal" | "vertical") => void;
+  armedRow: boolean;
+  onToggleArmedRow: () => void;
 }
 
 export function Toolbar({
@@ -58,6 +68,16 @@ export function Toolbar({
   measureMode,
   onToggleMeasure,
   measureResultLabel,
+  rowEquipmentId,
+  onRowEquipmentChange,
+  rowCount,
+  onRowCountChange,
+  rowGapIn,
+  onRowGapChange,
+  rowDirection,
+  onRowDirectionChange,
+  armedRow,
+  onToggleArmedRow,
 }: ToolbarProps) {
   return (
     <div className="flex flex-col gap-4 w-64 shrink-0 border-r border-neutral-200 bg-neutral-50 p-4 h-full overflow-y-auto">
@@ -95,6 +115,88 @@ export function Toolbar({
                 </button>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {!readOnly && (
+        <div className="border-t border-neutral-200 pt-4">
+          <h2 className="text-sm font-semibold text-neutral-700 mb-2">Add a Row</h2>
+          <p className="text-xs text-neutral-500 mb-2">
+            Place several in a line at once, spaced by an exact edge-to-edge gap — e.g. 56&quot; between
+            72&quot; rounds — instead of placing and lining each one up by hand.
+          </p>
+          <div className="flex flex-col gap-1.5">
+            <select
+              value={rowEquipmentId ?? ""}
+              onChange={(e) => onRowEquipmentChange(e.target.value)}
+              className="border border-neutral-300 rounded-md px-2 py-1.5 text-sm"
+            >
+              <option value="" disabled>
+                Choose equipment…
+              </option>
+              {equipment.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-neutral-600 flex flex-col gap-1 flex-1">
+                Count
+                <input
+                  type="number"
+                  min={2}
+                  max={50}
+                  value={rowCount}
+                  onChange={(e) => onRowCountChange(Math.max(2, Number(e.target.value) || 2))}
+                  className="border border-neutral-300 rounded-md px-2 py-1.5 text-sm"
+                />
+              </label>
+              <label className="text-xs text-neutral-600 flex flex-col gap-1 flex-1">
+                Gap (in)
+                <input
+                  type="number"
+                  min={0}
+                  value={rowGapIn}
+                  onChange={(e) => onRowGapChange(Math.max(0, Number(e.target.value) || 0))}
+                  className="border border-neutral-300 rounded-md px-2 py-1.5 text-sm"
+                />
+              </label>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => onRowDirectionChange("horizontal")}
+                className={`flex-1 text-xs px-2 py-1.5 rounded-md border transition-colors ${
+                  rowDirection === "horizontal"
+                    ? "bg-blue-50 border-blue-500 text-blue-900"
+                    : "bg-white border-neutral-300 hover:border-neutral-500"
+                }`}
+              >
+                →  Horizontal
+              </button>
+              <button
+                onClick={() => onRowDirectionChange("vertical")}
+                className={`flex-1 text-xs px-2 py-1.5 rounded-md border transition-colors ${
+                  rowDirection === "vertical"
+                    ? "bg-blue-50 border-blue-500 text-blue-900"
+                    : "bg-white border-neutral-300 hover:border-neutral-500"
+                }`}
+              >
+                ↓  Vertical
+              </button>
+            </div>
+            <button
+              onClick={onToggleArmedRow}
+              disabled={!rowEquipmentId}
+              className={`text-sm px-3 py-2 rounded-md border transition-colors disabled:opacity-50 ${
+                armedRow
+                  ? "bg-blue-50 border-blue-500 ring-1 ring-blue-500 text-blue-900"
+                  : "bg-white border-neutral-300 hover:border-neutral-400 hover:bg-neutral-100"
+              }`}
+            >
+              {armedRow ? "Click the room to place the row…" : "Place Row"}
+            </button>
           </div>
         </div>
       )}

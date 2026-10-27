@@ -102,7 +102,22 @@ function generateChairsAround(
     // if there are more chairs than the long sides can hold.
     const halfLen = tableItem.lengthIn / 2;
     const halfWid = tableItem.widthIn / 2;
-    const chairDepth = gap + (chairItem.lengthIn ?? 20) / 2;
+    const chairLengthIn = chairItem.lengthIn ?? 20;
+    // The short ends keep the standard table-edge-to-chair clearance...
+    const chairDepth = gap + chairLengthIn / 2;
+    // ...but the two long sides are placed to hit a specific overall
+    // footprint instead: 62in from the back of one chair, across the
+    // table, to the back of the opposite chair — per Dan's spec, since the
+    // flat `gap` clearance made a 30in-wide table with 20in-deep chairs on
+    // both sides come out to 78in overall, wider than Great Plains actually
+    // plans these. That means the chair sits with its seat a few inches
+    // under the table edge (62in leaves less than a table-width-plus-two-
+    // chair-depths), which matches how these are drawn in practice — chairs
+    // tucked in, not pulled out. Math.max guards against a hypothetical
+    // rect table wider than the 62in target itself, which would otherwise
+    // place the chair center inside the table.
+    const ACROSS_CHAIR_SPAN_IN = 62;
+    const longSideChairCenterOffset = Math.max(halfWid, ACROSS_CHAIR_SPAN_IN / 2 - chairLengthIn / 2);
     const chairSpan = (chairItem.widthIn ?? 18) + 2;
     const perLongSide = Math.max(1, Math.floor(tableItem.lengthIn / chairSpan));
     const positions: { x: number; y: number; rotation: number }[] = [];
@@ -112,9 +127,9 @@ function generateChairsAround(
         const t = (i + 1) / (n + 1); // 0..1 along the table's length
         const y = -halfLen + t * tableItem.lengthIn!;
         if (side === "left") {
-          positions.push({ x: -halfWid - chairDepth, y, rotation: 270 });
+          positions.push({ x: -longSideChairCenterOffset, y, rotation: 270 });
         } else {
-          positions.push({ x: halfWid + chairDepth, y, rotation: 90 });
+          positions.push({ x: longSideChairCenterOffset, y, rotation: 90 });
         }
       }
     };

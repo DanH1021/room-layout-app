@@ -103,6 +103,14 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
   const [rowDirection, setRowDirection] = useState<"horizontal" | "vertical">("horizontal");
   const [armedRow, setArmedRow] = useState(false);
 
+  // Snap-to-item: when placing a single piece of equipment (not the row
+  // tool), snap it onto the same axis as the nearest already-placed item
+  // of the same equipment type, spaced an exact edge-to-edge gap from it —
+  // a one-at-a-time version of the row tool for "place the first one
+  // exactly, then just click roughly where the next should go."
+  const [snapToItemEnabled, setSnapToItemEnabled] = useState(false);
+  const [snapToItemGapIn, setSnapToItemGapIn] = useState(56);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const groupRefs = useRef<Record<string, Konva.Group>>({});
   const transformerRef = useRef<Konva.Transformer>(null);
@@ -342,12 +350,53 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
     setArmedEquipmentId((prev) => (prev === equipmentItemId ? null : equipmentItemId));
   }
 
+  // Finds the closest already-placed parent object of the same equipment
+  // type to a clicked point — used by snap-to-item placement below.
+  function findNearestSameTypeParent(equipmentItemId: string, xIn: number, yIn: number): LayoutObject | null {
+    let best: LayoutObject | null = null;
+    let bestDist = Infinity;
+    for (const p of parents) {
+      if (p.equipmentItemId !== equipmentItemId) continue;
+      const d = Math.hypot(p.x - xIn, p.y - yIn);
+      if (d < bestDist) {
+        bestDist = d;
+        best = p;
+      }
+    }
+    return best;
+  }
+
   // Places one instance of the currently-armed equipment centered at the
-  // given room-space point (inches), snapping to the grid same as dragging.
+  // given room-space point (inches). Normally this snaps to the grid, same
+  // as dragging. When snap-to-item is on and an existing item of the same
+  // type is nearby, it instead snaps onto that item's row/column (whichever
+  // axis the click is further along) at an exact edge-to-edge spacing from
+  // it, exactly like the row tool's spacing math but one item at a time —
+  // the click only decides which side to place on, not the exact distance.
   function placeArmedEquipmentAt(xIn: number, yIn: number) {
     if (!armedEquipmentId || readOnly) return;
-    const centerX = snap(xIn);
-    const centerY = snap(yIn);
+    let centerX: number;
+    let centerY: number;
+    const ref = snapToItemEnabled ? findNearestSameTypeParent(armedEquipmentId, xIn, yIn) : null;
+    if (ref) {
+      const item = getEquipmentItem(armedEquipmentId);
+      const dx = xIn - ref.x;
+      const dy = yIn - ref.y;
+      const horizontal = Math.abs(dx) >= Math.abs(dy);
+      const alongAxisIn =
+        item.shape === "circle"
+          ? item.diameterIn ?? 24
+          : horizontal
+            ? item.widthIn ?? 24
+            : item.lengthIn ?? 24;
+      const step = alongAxisIn + snapToItemGapIn;
+      const sign = (horizontal ? dx : dy) >= 0 ? 1 : -1;
+      centerX = horizontal ? ref.x + sign * step : ref.x;
+      centerY = horizontal ? ref.y : ref.y + sign * step;
+    } else {
+      centerX = snap(xIn);
+      centerY = snap(yIn);
+    }
     const newObjects = instantiateEquipment(armedEquipmentId, centerX, centerY, getEquipmentItem);
     setObjects((prev) => [...prev, ...newObjects]);
     setSelectedIds(new Set([newObjects[0].id]));
@@ -508,6 +557,10 @@ export default function RoomCanvas({ layoutId }: { layoutId: string }) {
         onRowDirectionChange={setRowDirection}
         armedRow={armedRow}
         onToggleArmedRow={toggleArmedRow}
+        snapToItemEnabled={snapToItemEnabled}
+        onToggleSnapToItem={() => setSnapToItemEnabled((v) => !v)}
+        snapToItemGapIn={snapToItemGapIn}
+        onSnapToItemGapChange={setSnapToItemGapIn}
       />
       <div ref={containerRef} className="flex-1 h-full bg-neutral-100 overflow-hidden relative">
         <div className="absolute top-2 left-2 z-10 bg-white/90 backdrop-blur px-3 py-1.5 rounded-md text-xs text-neutral-700 shadow-sm flex items-center gap-3">

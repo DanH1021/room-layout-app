@@ -39,6 +39,10 @@ interface ToolbarProps {
   onRowDirectionChange: (direction: "horizontal" | "vertical") => void;
   armedRow: boolean;
   onToggleArmedRow: () => void;
+  snapToItemEnabled: boolean;
+  onToggleSnapToItem: () => void;
+  snapToItemGapIn: number;
+  onSnapToItemGapChange: (gapIn: number) => void;
 }
 
 export function Toolbar({
@@ -78,6 +82,10 @@ export function Toolbar({
   onRowDirectionChange,
   armedRow,
   onToggleArmedRow,
+  snapToItemEnabled,
+  onToggleSnapToItem,
+  snapToItemGapIn,
+  onSnapToItemGapChange,
 }: ToolbarProps) {
   return (
     <div className="flex flex-col gap-4 w-64 shrink-0 border-r border-neutral-200 bg-neutral-50 p-4 h-full overflow-y-auto">
@@ -115,6 +123,29 @@ export function Toolbar({
                 </button>
               );
             })}
+          </div>
+          <div className="mt-3 pt-3 border-t border-neutral-200">
+            <label className="text-xs text-neutral-700 flex items-center gap-2 mb-2">
+              <input type="checkbox" checked={snapToItemEnabled} onChange={onToggleSnapToItem} />
+              Snap to nearest item of this type
+            </label>
+            {snapToItemEnabled && (
+              <label className="text-xs text-neutral-600 flex flex-col gap-1">
+                Spacing (in) &mdash; edge to edge
+                <input
+                  type="number"
+                  min={0}
+                  value={snapToItemGapIn}
+                  onChange={(e) => onSnapToItemGapChange(Math.max(0, Number(e.target.value) || 0))}
+                  className="border border-neutral-300 rounded-md px-2 py-1.5 text-sm"
+                />
+              </label>
+            )}
+            <p className="text-xs text-neutral-500 mt-1.5">
+              Place the first one exactly where you want it. With this on, click roughly where the next
+              should go and it snaps onto the same row/column as the nearest existing one of this type,
+              spaced exactly this far apart.
+            </p>
           </div>
         </div>
       )}

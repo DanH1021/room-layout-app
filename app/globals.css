@@ -12,12 +12,16 @@
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/*
+ * Intentionally no `prefers-color-scheme: dark` override here.
+ * Every component in this app (Toolbar, dialogs, buttons, etc.) is built
+ * with hardcoded light-theme colors (bg-white, border-neutral-*, etc.).
+ * If the OS/browser is in dark mode, the old override flipped --foreground
+ * to a light color while those hardcoded light backgrounds stayed white,
+ * producing unreadable light-gray-on-white text throughout the UI
+ * (this is what was reported as buttons being "grayed out and hard to see").
+ * The app is light-themed only for now, so we pin the light palette.
+ */
 
 body {
   background: var(--background);

@@ -48,6 +48,10 @@ const BAND_GUTTER = 10; // gap between the room drawing and the band's top rule
 // the band; totals/scale and setup notes split the row underneath.
 const LEGEND_ROW_HEIGHT = 58;
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
 function hexToRgb(hex: string): RGB {
   const clean = hex.replace("#", "");
   const r = parseInt(clean.substring(0, 2), 16) / 255;
@@ -219,7 +223,7 @@ function drawEquipment(
 
   for (const parent of parents) {
     if (parent.shape === "text") {
-      drawTextLabel(page, font, parent, toPagePoint);
+      drawTextLabel(page, font, parent, toPagePoint, scalePtPerIn);
       continue;
     }
     if (!parent.equipmentItemId) continue;
@@ -246,11 +250,16 @@ function drawEquipment(
       drawShape(page, absoluteChild, childItem, toPagePoint, scalePtPerIn);
     }
 
-    // Label large-enough tables with their equipment name.
+    // Label large-enough tables with their equipment name. Font size scales
+    // with the room's own drawing scale (clamped to a legible range) rather
+    // than a flat point size, same reasoning as drawTextLabel below — a
+    // fixed size looks right for a typical room but swamps or disappears
+    // at the very different scalePtPerIn a much larger or smaller room ends
+    // up with.
     const labelWidthIn = item.shape === "circle" ? item.diameterIn ?? 0 : item.widthIn ?? 0;
     if (labelWidthIn * scalePtPerIn > 40) {
       const center = toPagePoint(parent.x, parent.y);
-      const fontSize = 7;
+      const fontSize = clamp(9 * scalePtPerIn, 5, 9);
       const textWidth = font.widthOfTextAtSize(item.name, fontSize);
       page.drawText(item.name, {
         x: center.x - textWidth / 2,
@@ -263,6 +272,20 @@ function drawEquipment(
   }
 }
 
+// A text label's on-page height, in the SAME real-world inches the rest of
+// the drawing is scaled in — not a flat PDF point size. A flat size looked
+// right at the scalePtPerIn a mid-size room happens to land on, but on a
+// much larger room (where scalePtPerIn shrinks to fit the whole floor plan
+// on one page) it stayed full-size and ballooned over neighboring tables
+// and chairs; on a tiny room it would look oversized the other way. 13in is
+// tuned so an average banquet room (around 60x40ft) comes out close to the
+// old fixed 10pt look. Clamped to a legible range at either extreme, since
+// a real room can be large enough that true-to-scale text would be
+// unreadably small.
+const TEXT_LABEL_HEIGHT_IN = 13;
+const TEXT_LABEL_MIN_PT = 6;
+const TEXT_LABEL_MAX_PT = 14;
+
 /**
  * A plain text annotation (table numbers, "Gift Table", etc.) — no
  * equipment item backs it, just the object's own label/position/rotation.
@@ -273,15 +296,16 @@ function drawTextLabel(
   page: PDFPage,
   font: PDFFont,
   object: LayoutObject,
-  toPagePoint: (x: number, y: number) => { x: number; y: number }
+  toPagePoint: (x: number, y: number) => { x: number; y: number },
+  scalePtPerIn: number
 ) {
   const text = object.label ?? "";
   if (!text) return;
   const center = toPagePoint(object.x, object.y);
-  const fontSize = 10;
+  const fontSize = clamp(TEXT_LABEL_HEIGHT_IN * scalePtPerIn, TEXT_LABEL_MIN_PT, TEXT_LABEL_MAX_PT);
   const textWidth = font.widthOfTextAtSize(text, fontSize);
-  const paddingX = 5;
-  const paddingY = 4;
+  const paddingX = fontSize * 0.5;
+  const paddingY = fontSize * 0.4;
   page.drawRectangle({
     x: center.x - textWidth / 2 - paddingX,
     y: center.y - fontSize / 2 - paddingY + 1,
